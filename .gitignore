@@ -1,0 +1,66 @@
+ros2_ws
+
+install/
+log/
+build/
+
+.cache/
+.config/
+.gazebo/
+.ignition/
+.ros/
+.rviz2/
+.sdformat/
+core*
+.sudo_as_admin_successful
+.profile
+
+# Ignore bash files
+.bash*
+
+# Ignore generated docs
+*.dox
+*.wikidoc
+
+# eclipse stuff
+.project
+.cproject
+
+# qcreator stuff
+CMakeLists.txt.user
+
+srv/_*.py
+*.pcd
+*.pyc
+qtcreator-*
+*.user
+
+*~
+
+# Emacs
+.#*
+
+# Colcon custom files
+COLCON_IGNORE
+AMENT_IGNORE
+
+# IDE
+.vscode/
+.idea/
+.devcontainer/
+
+.Xauthority
+
+ros2_ws/
+ros_ws/
+
+temp/
+
+data/
+
+.claude_container
+
+deps/
+
+Repo_Hotfixes.md
+Fer_Real_Time_Control_Manual.md

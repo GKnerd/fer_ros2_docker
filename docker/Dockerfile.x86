@@ -137,6 +137,7 @@ RUN git submodule update --init --recursive
 RUN  cmake -S . \
     -B build \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
     -DBUILD_EXAMPLES=ON \
     -DBUILD_TESTS=OFF \
     && cmake --build build -j"$(nproc)"
@@ -156,6 +157,8 @@ RUN . /opt/ros/$ROS_DISTRO/setup.sh && \
     --merge-install \
     --cmake-clean-cache \
     --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+    -DBUILD_TESTING=OFF \
     -DFranka_DIR:PATH=/home/${USER}/deps/libfranka/build 
 
 RUN echo "source /home/$USER/ros2_ws/install/setup.bash" >> /home/$USER/.bashrc

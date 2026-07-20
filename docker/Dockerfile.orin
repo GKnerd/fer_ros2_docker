@@ -23,7 +23,7 @@
 ##                                 Base Image                               ##
 ##############################################################################
 ARG ROS_DISTRO=jazzy
-FROM --platform=linux/arm64 ros:${ROS_DISTRO}-ros-base 
+FROM ros:${ROS_DISTRO}-ros-base 
 ENV PROJECT_WS=ros2_ws
 ENV TZ=Europe/Berlin
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone

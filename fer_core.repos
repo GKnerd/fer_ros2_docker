@@ -33,3 +33,7 @@ repositories:
     type: git
     url: git@github.com:GKnerd/speed_and_separation_monitoring.git
     version: main
+  ros2_ws/src/fer_interfaces:
+    type: git
+    url: https://github.com/GKnerd/fer_interfaces.git
+    version: main

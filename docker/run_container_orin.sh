@@ -74,9 +74,11 @@ docker run \
     --privileged \
     --net host \
     --ipc host \
+    --cap-add=sys_nice \
+    --ulimit rtprio=99 \
+    --ulimit memlock=-1 \
     -e DISPLAY=$DISPLAY \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
-    -v ~/.Xauthority:/home/${CONTAINER_USER}/.Xauthority \
     -v $PACKAGE_ROOT/ros2_ws:/home/${CONTAINER_USER}/ros2_ws \
     -v $PACKAGE_ROOT/env:/home/${CONTAINER_USER}/env \
     -v $PACKAGE_ROOT/data:/home/${CONTAINER_USER}/data \

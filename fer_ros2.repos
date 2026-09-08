@@ -7,6 +7,10 @@ repositories:
     type: git
     url: https://github.com/frankarobotics/franka_description.git
     version: 72baf5bf4e88eaec27f0eb61be1b20a001abf2ab
+  ros2_ws/src/fer_ros2:
+    type: git
+    url: https://github.com/GKnerd/fer_ros2.git
+    version: jazzy
   ros2_ws/src/BehaviorTree.ROS2:
     # Pinned to PR #122 (issue #121) — fixes thread crash on ROS 2 Jazzy
     # not yet shipped in the 0.3.0 release tag.

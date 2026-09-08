@@ -57,7 +57,6 @@ docker build \
     --build-arg UID="$uid" \
     --build-arg GID="$gid" \
     --network=host \
-    --platform=linux/arm64 \
     -t $PACKAGE_NAME/ros:jazzy_moveit . \
     -f $PACKAGE_ROOT/docker/Dockerfile.orin \
     && docker create --name temp-container $PACKAGE_NAME/ros:jazzy_moveit \

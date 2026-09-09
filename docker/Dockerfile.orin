@@ -149,12 +149,18 @@ RUN sudo apt-get update && \
     rosdep update && \
     rosdep install --from-paths src --ignore-src -r -y
 
+# Packages that are not yet ported to Jazzy and are excluded from the build.
+# multi_mode_controller does not compile; multi_mode_controller_impl and
+# panda_motion_generators only fail because they depend on it. 
+ARG SKIP_PACKAGES="multi_mode_controller multi_mode_controller_impl panda_motion_generators"
+
 RUN . /opt/ros/$ROS_DISTRO/setup.sh && \
     colcon build --symlink-install \
     --merge-install \
     --cmake-clean-cache \
+    ${SKIP_PACKAGES:+--packages-ignore ${SKIP_PACKAGES}} \
     --cmake-args -DCMAKE_BUILD_TYPE=Release \
-    -DFranka_DIR:PATH=/home/${USER}/deps/libfranka/build 
+    -DFranka_DIR:PATH=/home/${USER}/deps/libfranka/build
 
 RUN echo "source /home/$USER/ros2_ws/install/setup.bash" >> /home/$USER/.bashrc
 

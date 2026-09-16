@@ -1,0 +1,39 @@
+# Docker artifacts (build/run scripts are not needed inside the image)
+docker/
+.dockerignore
+
+# Git and IDE metadata
+.git
+.gitignore
+.vscode/
+.idea/
+.devcontainer/
+
+# Host-only directories (bind-mounted at runtime or never wanted in the image)
+data/
+log/
+env/
+config/
+.claude_container/
+
+# Host build artifacts — only ros2_ws/src and deps are copied into the image
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# Top-level docs and manifests (informational, not consumed at build time)
+README.md
+LICENSE
+NOTICE.md
+docs/
+*.repos
+Repo_Hotfixes.md
+Fer_Real_Time_Control_Manual.md
+
+# Python and editor cruft
+__pycache__
+*.pyc
+*.pyo
+*~
+*.swp
+.DS_Store

@@ -2,10 +2,11 @@
 #    Modifications copyright 2026 Georgios Katranis
 #
 #    This Dockerfile is derived from internal Docker tooling developed at
-#    Proximity Robotics & Automation GmbH. It has been adapted for the development
-#    development of the Franka Emika Robot (FER) stack: dependency set,
-#    user-creation block, CycloneDDS configuration, and the colcon build
-#    stage have been modified. The original layering pattern is retained.
+#    Proximity Robotics & Automation GmbH. It has been adapted for the
+#    Franka Emika Robot (FER) platform: dependency set, user-creation block,
+#    CycloneDDS configuration, optional libfranka build, colcon build stage,
+#    and a single image for x86_64 and aarch64 have been modified. The
+#    original layering pattern is retained.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -23,7 +24,7 @@
 ##                                 Base Image                               ##
 ##############################################################################
 ARG ROS_DISTRO=jazzy
-FROM ros:${ROS_DISTRO}-ros-base 
+FROM ros:${ROS_DISTRO}-ros-base
 ENV PROJECT_WS=ros2_ws
 ENV TZ=Europe/Berlin
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
@@ -34,6 +35,8 @@ ENV LC_ALL=C.UTF-8
 ##############################################################################
 ##                                 Global Dependecies                       ##
 ##############################################################################
+
+
 RUN apt-get update && apt-get upgrade -y \
     && apt-get install --no-install-recommends -y \
     apt-utils \
@@ -130,14 +133,21 @@ USER ${USER}
 ##############################################################################
 COPY --chown=${USER}:${USER} deps /home/${USER}/deps
 
-WORKDIR /home/${USER}/deps/libfranka
-RUN git submodule update --init --recursive
-RUN  cmake -S . \
-    -B build \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_EXAMPLES=ON \
-    -DBUILD_TESTS=OFF \
-    && cmake --build build -j"$(nproc)"
+# deps/libfranka is only present when fer_real.repos was imported.
+WORKDIR /home/${USER}/deps
+RUN if [ -d libfranka ]; then \
+        cd libfranka && \
+        git submodule update --init --recursive && \
+        cmake -S . \
+        -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+        -DBUILD_EXAMPLES=ON \
+        -DBUILD_TESTS=OFF \
+        && cmake --build build -j"$(nproc)"; \
+    else \
+        echo "deps/libfranka not found, skipping libfranka build (simulation-only import)"; \
+    fi
 
 ##############################################################################
 ##                                 Build ROS                                ##
@@ -151,7 +161,7 @@ RUN sudo apt-get update && \
 
 # Packages that are not yet ported to Jazzy and are excluded from the build.
 # multi_mode_controller does not compile; multi_mode_controller_impl and
-# panda_motion_generators only fail because they depend on it. 
+# panda_motion_generators only fail because they depend on it.
 ARG SKIP_PACKAGES="multi_mode_controller multi_mode_controller_impl panda_motion_generators"
 
 RUN . /opt/ros/$ROS_DISTRO/setup.sh && \
@@ -160,6 +170,8 @@ RUN . /opt/ros/$ROS_DISTRO/setup.sh && \
     --cmake-clean-cache \
     ${SKIP_PACKAGES:+--packages-ignore ${SKIP_PACKAGES}} \
     --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+    -DBUILD_TESTING=OFF \
     -DFranka_DIR:PATH=/home/${USER}/deps/libfranka/build
 
 RUN echo "source /home/$USER/ros2_ws/install/setup.bash" >> /home/$USER/.bashrc

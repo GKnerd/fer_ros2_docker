@@ -1,5 +1,12 @@
 #!/bin/bash
 #    Copyright 2025 Proximity Robotics & Automation GmbH
+#    Modifications copyright 2026 Georgios Katranis
+#
+#    This script is derived from internal Docker tooling developed at
+#    Proximity Robotics & Automation GmbH. It has been adapted for the
+#    Franka Emika Robot (FER) platform: architecture-specific image tag,
+#    real-time container limits, optional X authority mount, and the
+#    persistent Claude session directory.
 
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -24,6 +31,7 @@ RESET="\033[0m"
 
 PACKAGE_NAME="fer_ros2_docker"
 CONTAINER_USER="fer_ros2"
+IMAGE="$PACKAGE_NAME/ros:jazzy_$(uname -m)"
 
 # Set Package root
 if [[ "$(pwd)" == *"/$PACKAGE_NAME/"* ]]; then
@@ -67,19 +75,28 @@ for FOLDER in .claude_container; do
     fi
 done
 
+# Mount the X authority file only where one exists
+XAUTH_MOUNT=()
+if [ -f "$HOME/.Xauthority" ]; then
+    XAUTH_MOUNT=(-v "$HOME/.Xauthority:/home/${CONTAINER_USER}/.Xauthority")
+fi
+
 docker run \
     --name $PACKAGE_NAME \
     -it \
     --privileged \
     --net host \
     --ipc host \
+    --cap-add=sys_nice \
+    --ulimit rtprio=99 \
+    --ulimit memlock=-1 \
     -e DISPLAY=$DISPLAY \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
-    -v ~/.Xauthority:/home/${CONTAINER_USER}/.Xauthority \
+    "${XAUTH_MOUNT[@]}" \
     -v $PACKAGE_ROOT/ros2_ws:/home/${CONTAINER_USER}/ros2_ws \
     -v $PACKAGE_ROOT/env:/home/${CONTAINER_USER}/env \
     -v $PACKAGE_ROOT/data:/home/${CONTAINER_USER}/data \
     -v $PACKAGE_ROOT/.claude_container:/home/${CONTAINER_USER}/.claude \
     --entrypoint /bin/bash \
     --rm \
-    $PACKAGE_NAME/ros:jazzy_moveit 
+    $IMAGE

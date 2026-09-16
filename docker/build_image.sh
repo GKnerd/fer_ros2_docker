@@ -1,6 +1,12 @@
 #!/bin/bash
 
 #    Copyright 2025 Proximity Robotics & Automation GmbH
+#    Modifications copyright 2026 Georgios Katranis
+#
+#    This script is derived from internal Docker tooling developed at
+#    Proximity Robotics & Automation GmbH. It has been adapted for the
+#    Franka Emika Robot (FER) platform: single Dockerfile for x86_64 and
+#    aarch64, architecture-specific image tag, and the deps directory.
 
 #    Licensed under the Apache License, Version 2.0 (the "License");
 #    you may not use this file except in compliance with the License.
@@ -25,6 +31,7 @@ RESET="\033[0m"
 
 PACKAGE_NAME="fer_ros2_docker"
 CONTAINER_USER="fer_ros2"
+IMAGE="$PACKAGE_NAME/ros:jazzy_$(uname -m)"
 
 # Set Package root
 if [[ "$(pwd)" == *"/$PACKAGE_NAME/"* ]]; then
@@ -45,7 +52,7 @@ else
     exit 1
 fi
 
-for FOLDER in ros2_ws/src env log data; do
+for FOLDER in ros2_ws/src deps env log data; do
     HOST_PATH="$PACKAGE_ROOT/$FOLDER"
     if [ ! -d "$HOST_PATH" ]; then
         echo -e "${YELLOW_BOLD}Warning: $HOST_PATH does not exist. Creating it...${RESET}"
@@ -57,8 +64,8 @@ docker build \
     --build-arg UID="$uid" \
     --build-arg GID="$gid" \
     --network=host \
-    -t $PACKAGE_NAME/ros:jazzy_moveit . \
-    -f $PACKAGE_ROOT/docker/Dockerfile.x86 \
-    && docker create --name temp-container $PACKAGE_NAME/ros:jazzy_moveit \
+    -t $IMAGE . \
+    -f $PACKAGE_ROOT/docker/Dockerfile \
+    && docker create --name temp-container $IMAGE \
     && docker cp temp-container:/home/${CONTAINER_USER}/ros2_ws/. $PACKAGE_ROOT/ros2_ws/. \
     && docker rm temp-container

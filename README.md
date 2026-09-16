@@ -11,9 +11,9 @@ Supported hosts: x86_64 workstations and the Jetson Orin AGX (aarch64).
 
 | Manifest | Contents |
 |---|---|
-| `fer_core.repos` | `franka_description`, `BehaviorTree.ROS2`, `fer_moveit_config`, `fer_skills`, `fer_behavior_trees`, `fer_planning_world_model`, `speed_and_separation_monitoring` |
-| `fer_real.repos` | `libfranka` 0.9.2 (`deps/`), `fer_ros2` (driver and real bringup) |
-| `fer_sim.repos` | `mujoco_ros2_control`, `mujoco_vendor`, `fer_ros2_mjc_bringup` |
+| `fer_core.repos` | `franka_description`, `BehaviorTree.ROS2`, `fer_ros2_bringup`, `fer_moveit_config`, `fer_skills`, `fer_behavior_trees`, `fer_planning_world_model`, `speed_and_separation_monitoring` |
+| `fer_real.repos` | `libfranka` 0.9.2 (`deps/`), `fer_ros2` (driver) |
+| `fer_sim.repos` | `mujoco_ros2_control`, `mujoco_vendor` |
 
 `fer_core.repos` is always imported. Add the real profile, the simulation
 profile, or both:
@@ -33,6 +33,13 @@ vcs import . < fer_sim.repos      # simulation
 | core + real + sim | x86_64 | both |
 
 The Orin runs the real robot only; do not import the simulation profile there.
+
+`fer_ros2_bringup` serves both backends and is selected at launch time:
+
+```bash
+ros2 launch fer_ros2_bringup fer_moveit_skills_bt.launch.py hardware:=mujoco
+ros2 launch fer_ros2_bringup fer_moveit_skills_bt.launch.py hardware:=real robot_ip:=<FCI address>
+```
 
 ## Build and run
 

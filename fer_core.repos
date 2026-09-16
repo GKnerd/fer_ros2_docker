@@ -9,6 +9,10 @@ repositories:
     type: git
     url: https://github.com/BehaviorTree/BehaviorTree.ROS2.git
     version: 6c6aa078ee7bc52fec98984bed4964556abf5beb
+  ros2_ws/src/fer_ros2_bringup:
+    type: git
+    url: https://github.com/GKnerd/fer_ros2_bringup.git
+    version: main
   ros2_ws/src/fer_moveit_config:
     type: git
     url: https://github.com/GKnerd/fer_moveit_config.git

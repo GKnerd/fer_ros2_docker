@@ -21,7 +21,7 @@ CI, multi-host deployment layout.
 **Follow-up after the consolidation:** skills redesign incl. arbitration (Phase 8).
 
 **Deferred:** Cartesian impedance control, the wrench path (§11), the gripper relay
-controller (Phase 4). Before the impedance controller is written, decide where its
+controller (Phases 3–5), a mock hardware backend (Phase 6). Before the impedance controller is written, decide where its
 dynamics model comes from (§10).
 
 ---
@@ -104,7 +104,7 @@ Every phase is validated against both environments.
 |---|---|---|
 | `fer_ros2_docker` | meta-repo (promoted) | none |
 | `fer_ros2_driver` | driver (renamed from `fer_ros2`) | `franka_hardware`, `franka_gripper`, `franka_msgs`, `franka_semantic_components`, `franka_robot_state_broadcaster`, `franka_bringup` (driver-only launch) |
-| `fer_ros2_bringup` | robot bringup (renamed from `fer_ros2_mjc_bringup`; simulation profile until Phase 3, core afterwards) | `fer_ros2_bringup` |
+| `fer_ros2_bringup` | robot bringup for real and MuJoCo (new repo, grown from `fer_ros2/fer_bringup`) | `fer_ros2_bringup` |
 | `fer_moveit_config` | MoveIt configuration | `fer_moveit_config` |
 | `fer_skills` | skills | `fer_skills` (Phase 8: + `fer_skill_interfaces`, split server/backend) |
 | `fer_behavior_trees` | behavior | `fer_behavior_trees` |
@@ -119,9 +119,9 @@ fer_behavior_trees ──> fer_skills ──> fer_moveit_config ──> franka_d
                            └─────────────────────────────> franka_description (upstream)
 fer_world_model ──> (moveit_msgs only)
 
-fer_ros2_bringup (launch ladder) ──> franka_description, fer_moveit_config,
+fer_ros2_bringup (launch levels) ──> franka_description, fer_moveit_config,
                                      fer_skills, fer_behavior_trees, fer_world_model
-fer_ros2_bringup (hardware)      ──runtime──> franka_hardware | mujoco_ros2_control | mock
+fer_ros2_bringup (hardware)      ──runtime──> franka_hardware | mujoco_ros2_control
 franka_hardware ──> libfranka
 ```
 
@@ -143,8 +143,9 @@ package; it never depends on application internals.
 |---|---|
 | `GKnerd/fer_ros2_docker` | promoted to the platform meta-repo; absorbs the infra and docs of `fer_ros2_simulation` |
 | `GKnerd/fer_ros2` | renamed → `fer_ros2_driver`; loses `fer_bringup` (Phase 1) |
-| `GKnerd/fer_ros2_mjc_bringup` | renamed → `fer_ros2_bringup`; becomes the consolidated bringup |
-| `GKnerd/fer_moveit_config` | unchanged |
+| `GKnerd/fer_ros2_bringup` | new; `fer_bringup` extended to both backends (Phase 1) |
+| `GKnerd/fer_ros2_mjc_bringup` | contents merged into `fer_ros2_bringup`, then archived |
+| `GKnerd/fer_moveit_config` | one controller mapping per hardware (Phase 1) |
 | `GKnerd/fer_skills` | unchanged until Phase 8 |
 | `GKnerd/fer_behavior_trees` | unchanged |
 | `GKnerd/fer_planning_world_model` | unchanged |
@@ -162,6 +163,7 @@ are relative to the platform repo root; every file is imported with a plain
 ```
 fer_core.repos    ros2_ws/src/franka_description
                   ros2_ws/src/BehaviorTree.ROS2
+                  ros2_ws/src/fer_ros2_bringup
                   ros2_ws/src/fer_moveit_config
                   ros2_ws/src/fer_skills
                   ros2_ws/src/fer_behavior_trees
@@ -173,11 +175,10 @@ fer_real.repos    deps/libfranka
 
 fer_sim.repos     ros2_ws/src/mujoco_ros2_control
                   ros2_ws/src/mujoco_vendor
-                  ros2_ws/src/fer_ros2_mjc_bringup (fer_ros2_bringup after the rename)
 ```
 
-The bringup sits in the simulation profile while its `CMakeLists.txt` requires the
-MuJoCo packages; it moves to the core profile in Phase 3.
+`fer_ros2_bringup` is in the core profile: it compiles nothing and needs no
+`find_package` beyond `ament_cmake`, so it builds with either backend absent.
 
 ```bash
 cd ~/Projects/fer_ros2_ws
@@ -203,13 +204,10 @@ libfranka is an image-level dependency built from `deps/libfranka`, guarded by i
 presence. colcon builds whatever the imported profiles placed in `ros2_ws/src`, so
 no package lists are kept in the image.
 
-**Per-repo dependencies.** A component repo whose dependencies are not
-rosdep-resolvable carries a `dependencies.repos` so it can be used without the
-platform: `fer_ros2_driver` (libfranka), `fer_ros2_bringup` (`franka_description`),
-`fer_behavior_trees` (`BehaviorTree.ROS2`).
-
-**Pin ownership.** Each external has one authoritative pin: the platform profile.
-Platform CI asserts that every `dependencies.repos` agrees with it.
+**Pin ownership.** Each external has exactly one pin: the platform profile.
+Component repos carry no `.repos` files; component CI that needs an external
+(e.g. `franka_description` for `fer_ros2_bringup`) reads its pin from
+`fer_ros2_docker/fer_core.repos`.
 
 **Dev vs release.** Profiles track branches for development. A known-good state is
 frozen with `vcs export --exact` into `releases/<date-or-tag>.repos`.
@@ -217,8 +215,7 @@ frozen with `vcs export --exact` into `releases/<date-or-tag>.repos`.
 **Dependency declaration.** `fer_ros2_bringup` declares `mujoco_ros2_control` and
 `franka_gripper` as plain `<exec_depend>`. The Dockerfile runs
 `rosdep install --from-paths src --ignore-src -r -y`; `-r` continues past the absent
-profile's keys with a warning. The package builds either way because it compiles
-nothing and has no `find_package` beyond `ament_cmake` (Phase 3).
+profile's keys with a warning.
 
 ### 2.6 Conventions
 
@@ -265,24 +262,31 @@ root.
 ```
 fer_ros2_bringup/                        ← repo = package
 ├── urdf/
-│   ├── fer_hw.urdf.xacro                    ← includes upstream fer.urdf.xacro,
-│   │                                           adds one hardware overlay
-│   ├── control/fer_real.ros2_control.xacro
-│   ├── control/fer_mujoco.ros2_control.xacro
-│   ├── control/fer_mock.ros2_control.xacro
-│   └── mujoco/{franka_mujoco.xacro, franka_hand_mujoco.xacro}
+│   ├── fer.urdf.xacro                       ← includes upstream fer.urdf.xacro,
+│   │                                           hardware:=real|mujoco|none adds one overlay
+│   ├── control/fer_real.ros2_control.xacro  ← FrankaMultiHardwareInterface
+│   ├── control/fer_mujoco.ros2_control.xacro← MujocoSystemInterface
+│   └── mujoco/fer_mujoco_inputs.xacro       ← actuators, joint dynamics, gravcomp
 ├── config/
-│   ├── controllers_common.yaml  controllers_real.yaml  controllers_sim.yaml
-│   └── skill_server_fer.yaml                ← FER values for the skill server (Phase 8)
-├── launch/                                  ← the ladder, Phase 5
-├── scenes/  rviz/  test/
-├── dependencies.repos
-├── .github/workflows/
-└── package.xml  CMakeLists.txt  CHANGELOG.md  README.md  LICENSE
+│   ├── fer_controllers.yaml                 ← all backends
+│   ├── fer_controllers_real.yaml            ← franka_robot_state_broadcaster
+│   └── fer_controllers_gripper.yaml         ← gripper controllers (mujoco)
+├── launch/
+│   ├── fer_real_ros2_control.launch.py
+│   ├── fer_mujoco_ros2_control.launch.py
+│   ├── fer_moveit.launch.py
+│   ├── fer_moveit_skills.launch.py
+│   └── fer_moveit_skills_bt.launch.py
+├── scenes/base_world.xml
+├── rviz/fer_real.rviz  rviz/fer_mujoco.rviz
+├── test/test_description.py
+├── .github/workflows/ci.yml
+└── package.xml  CMakeLists.txt  README.md  LICENSE
 ```
 
-`fer_hw.urdf.xacro` contains no links, joints, meshes or inertials of its own. All
+`fer.urdf.xacro` contains no links, joints, meshes or inertials of its own. All
 robot geometry, kinematics and dynamics come from upstream `franka_description`.
+Both overlays name their ros2_control component `fer_hardware`.
 
 ---
 
@@ -325,9 +329,8 @@ ROS package changes.
    `FER_ROS2_Handoff.md`, `robotics_stack.md`. The previous `README.md` →
    `docs/legacy/README_real.md`.
 6. **`README.md`** rewritten around the profile workflow.
-7. **Rename GitHub repos:** `fer_ros2` → `fer_ros2_driver`,
-   `fer_ros2_mjc_bringup` → `fer_ros2_bringup`; update the profile URLs and paths
-   and the local remotes.
+7. **Rename GitHub repo** `fer_ros2` → `fer_ros2_driver`; update the profile URL
+   and path and the local remote.
 8. **Archive** `GKnerd/fer_ros2_simulation` and `GKnerd/fer_ws`.
 
 **Verification:** from a clean clone of `fer_ros2_docker` on x86_64, import and build
@@ -336,55 +339,114 @@ Every combination builds with the unchanged `docker/Dockerfile`.
 
 ---
 
-### Phase 1 — One description source, hardware as an overlay
+### Phase 1 — One bringup for the real robot and MuJoCo
 
-The root-cause fix. Upstream `franka_description/robots/fer/fer.urdf.xacro` is the
-only description source; the bringup adds hardware overlays on top of it.
+`fer_ros2/fer_bringup` becomes the repo `fer_ros2_bringup` and absorbs the
+simulation parts of `fer_ros2_mjc_bringup`. The hardware is a launch argument,
+`hardware:=real|mujoco`; `fer_ros2_mjc_bringup` is archived afterwards and
+`fer_ros2_driver` loses `fer_bringup/`.
 
-**`fer_ros2_bringup`**
-- Rename the package `fer_ros2_mjc_bringup` → `fer_ros2_bringup` (`package.xml`,
-  `CMakeLists.txt`, every `FindPackageShare`).
-- `urdf/fer_hw.urdf.xacro` — replaces `urdf/fer_mujoco.urdf.xacro`. Includes
-  upstream `robots/fer/fer.urdf.xacro` (as the current sim wrapper already does)
-  and forwards its arguments unchanged. Adds an argument `hardware`
-  (`real`|`mujoco`|`mock`) and includes exactly one overlay under `xacro:if`, gated
-  additionally by `ros2_control`:
-  - `urdf/control/fer_real.ros2_control.xacro` — copied from
-    `fer_ros2_driver/fer_bringup/urdf/fer_ros2_control.xacro` (source SHA in the
-    commit message).
-  - `urdf/control/fer_mujoco.ros2_control.xacro` plus `urdf/mujoco/*.xacro` —
-    moved from `urdf/fer/` and `urdf/end_effector/`.
-  - `urdf/control/fer_mock.ros2_control.xacro` — new, `mock_components/GenericSystem`.
+**Description.** Upstream `franka_description/robots/fer/fer.urdf.xacro` is the
+only description source.
+- `urdf/fer.urdf.xacro` includes it unmodified; all upstream arguments pass
+  through, upstream `ros2_control` stays `false` (enforced), and
+  `hardware:=real|mujoco|none` adds exactly one overlay.
+- `urdf/control/fer_real.ros2_control.xacro` — the former
+  `fer_bringup/urdf/fer_ros2_control.xacro` (`FrankaMultiHardwareInterface`).
+- `urdf/control/fer_mujoco.ros2_control.xacro` and
+  `urdf/mujoco/fer_mujoco_inputs.xacro` — from `fer_ros2_mjc_bringup`; the
+  duplicate finger actuator and equality of `franka_hand_mujoco.urdf.xacro` are
+  dropped, and the unused `version` / `robot_type` / `prefix` hardware
+  parameters are removed.
+- Both overlays name the component `fer_hardware`.
+- The real model is unchanged: apart from comments and the component name, the
+  new `hardware:=real` URDF equals the former `fer_bringup` URDF.
+- `fer_moveit_config` and `fer_skills` keep building from upstream
+  `fer.urdf.xacro` with `ros2_control:=false`.
 
-**`fer_moveit_config`, `fer_skills`**
-- Keep building from upstream `fer.urdf.xacro` with `ros2_control:=false`.
-- Align the forwarded arguments (`hand`, `ee_id`, geometry) with those the bringup
-  passes, so all consumers produce the same model.
+**Controllers.** Naming follows the ros2_control convention
+`<command_interface>_<type>_controller`.
 
-**`fer_ros2_driver`, landing together with the above**
-- Delete `fer_bringup/`, including `urdf/fer.xacro`, which called
-  `franka_robot.xacro` directly instead of the upstream `fer.urdf.xacro`.
-- Keep `franka_bringup` as a minimal driver-only launch so the driver stays
-  startable standalone.
+| Old (real) | Old (sim) | New |
+|---|---|---|
+| `effort_joint_trajectory_controller` | `joint_effort_traj_controller` | `effort_trajectory_controller` |
+| `vel_joint_trajectory_controller` | — | `velocity_trajectory_controller` |
+| — | `joint_pos_traj_controller` | `position_trajectory_controller` |
+| — | `gripper_position_controller` | `gripper_position_controller` |
+| — | `gripper_effort_controller` | `gripper_effort_controller` |
+| `joint_state_broadcaster` | `joint_state_broadcaster` | unchanged |
+| `franka_robot_state_broadcaster` | — | unchanged |
+| — | `cartesian_compliance_controller`, `motion_control_handle` | removed |
+| (future) | (future) | `cartesian_impedance_controller` |
 
-**Verification gate — blocking:** with overlays disabled, the bringup wrapper must
-reproduce upstream exactly, for every hardware value.
-```bash
-UP=$(ros2 pkg prefix franka_description)/share/franka_description/robots/fer/fer.urdf.xacro
-HW=$(ros2 pkg prefix fer_ros2_bringup)/share/fer_ros2_bringup/urdf/fer_hw.urdf.xacro
-xacro $UP ros2_control:=false                   > /tmp/upstream.urdf
-for h in real mujoco mock; do
-  xacro $HW hardware:=$h ros2_control:=false    > /tmp/$h.urdf
-  diff /tmp/upstream.urdf /tmp/$h.urdf          # must be empty
-done
-```
-Plus: the real robot still moves under `effort_jtc`.
+- `config/fer_controllers.yaml` — update rate, all controller types, the three
+  JTCs with gains (`antiwindup_strategy: none`, no `i_clamp`).
+- `config/fer_controllers_real.yaml` — `franka_robot_state_broadcaster`.
+- `config/fer_controllers_gripper.yaml` — the two gripper controllers (MuJoCo).
+- `ros2_control_node` and every spawner receive the file list for the selected
+  hardware; later files override earlier ones.
+- Only the broadcasters start active. Every motion and gripper controller is
+  loaded inactive and switched on with `ros2 control switch_controllers`.
+
+**Gripper seam.** The real gripper is the `franka_gripper` node `fer_gripper`
+serving `/fer_gripper/gripper_action`; `moveit_simple_controller_manager`
+resolves `<controller_name>/<action_ns>`, so it is routable by configuration.
+- `fer_moveit_config/config/moveit_controllers_real.yaml` — three JTCs and
+  `fer_gripper` (`action_ns: gripper_action`).
+- `fer_moveit_config/config/moveit_controllers_mujoco.yaml` — effort and position
+  JTCs, both gripper controllers (`action_ns: gripper_cmd`).
+- `fer_moveit_launch.py` takes `hardware` and loads the matching file;
+  `arm_control_type` / `hand_control_type` set `default: true` on
+  `<type>_trajectory_controller` / `gripper_<type>_controller`, and a type the
+  hardware does not offer aborts the launch. `controller_selection.yaml` is
+  deleted.
+- `MoveItSimpleControllerManager` reports every listed controller as available,
+  so a dead `fer_gripper` goes unnoticed by MoveIt; the real hardware launch
+  shuts the whole bringup down when the gripper node exits.
+
+**Launch levels.** Each level includes the one below and adds one part.
+
+| File | Adds |
+|---|---|
+| `fer_real_ros2_control.launch.py` / `fer_mujoco_ros2_control.launch.py` | description, RSP, ros2_control, controllers, gripper |
+| `fer_moveit.launch.py` | MoveIt |
+| `fer_moveit_skills.launch.py` | skill server |
+| `fer_moveit_skills_bt.launch.py` | BT server, world model |
+
+- The upper three take `hardware:=real|mujoco` (default `mujoco`) and include
+  `fer_<hardware>_ros2_control.launch.py`. `use_sim_time` is derived from
+  `hardware`; only the top level started opens RViz.
+- Real: `robot_ip` is required; the `joint_state_broadcaster` remap to
+  `fer/joint_states` is passed with `--controller-ros-args`; `joint_state_publisher`
+  merges arm and gripper states; `robot_description` comes from the topic.
+- MuJoCo: `scene:=` selects the MJCF scene, default `scenes/base_world.xml`.
+- Deleted: `fer_bringup.launch.py`, `empty_world.launch.py`,
+  `fer_mujoco_moveit`, `fer_mjc_moveit_skills`, `fer_mjc_moveit_skills_bt`.
+
+**CI.** `test/test_description.py` (`description-invariant`, §Phase 6) checks:
+- the model equals upstream for `hardware:=none|real|mujoco`, with and without hand;
+- exactly one overlay, named `fer_hardware`, with the right plugin;
+- every overlay joint exists; the real overlay's parameter and interface contract;
+- no duplicate MuJoCo actuators for any control type;
+- invalid `hardware` and `ros2_control:=true` are rejected;
+- every joint in the controller YAMLs exists, and every configured controller has a type.
+
+**Profiles.** `fer_ros2_bringup` joins `fer_core.repos`;
+`fer_ros2_mjc_bringup` leaves `fer_sim.repos`.
+
+**Verification.**
+- `description-invariant` green.
+- core+sim, core+real and core+real+sim build.
+- MuJoCo: all four levels start; after switching on the controllers, pick, place
+  and the BT run as before.
+- Real (Orin): hardware level with `robot_ip`, broadcasters active, gripper up;
+  MoveIt level plans and executes after `switch_controllers`; then skills and BT.
 
 ---
 
 ### Phase 2 — Expose all command interfaces in simulation
 
-Removes the cause of `controller_selection.yaml`.
+Removes `mujoco_control_type` / `hand_control_type` from the description.
 
 Supporting behaviour in `mujoco_system_interface.cpp`:
 `export_command_interfaces()` (1221-1253) exports one interface per declared
@@ -402,126 +464,33 @@ The MJCF actuator type gates which interfaces are usable:
 If no interface ends up enabled, `register_urdf_joints` throws (2082-2088).
 
 **`fer_ros2_bringup`**
-- `urdf/mujoco/franka_mujoco.xacro` — `<motor>` actuators unconditionally for all 7
-  arm joints and the finger (delete the `control_type` branches). Motor matches the
-  real FER, which is torque-controlled.
+- `urdf/mujoco/fer_mujoco_inputs.xacro` — `<motor>` actuators unconditionally for
+  all 7 arm joints and the finger. Motor matches the real FER, which is
+  torque-controlled.
 - `urdf/control/fer_mujoco.ros2_control.xacro` — `effort`, `position` and
   `velocity` command interfaces on every joint, matching the real overlay.
-- `config/controllers_sim.yaml` — position and velocity PID gains keyed by actuator
-  name, read via `control_toolbox::PidROS::initialize_from_ros_parameters()`
-  (1731, 1747). `pos_gripper` requires a position PID on the finger.
+- `config/fer_controllers_mujoco.yaml` — position and velocity PID gains keyed by
+  actuator name, read via
+  `control_toolbox::PidROS::initialize_from_ros_parameters()` (1731, 1747).
+  `gripper_position_controller` requires a position PID on the finger.
+- `velocity_trajectory_controller` is spawned in MuJoCo as well.
 
 **`fer_moveit_config`**
-- Delete `config/controller_selection.yaml`, `select_default_controllers()` and its
-  two launch arguments (`fer_moveit_launch.py:51-66, 310-321`).
+- `moveit_controllers_mujoco.yaml` gains `velocity_trajectory_controller`.
+- `hand_control_type` remains the only selection that differs by hardware.
 
 Afterwards the sim and real `<ros2_control>` blocks have the same shape, and mode
 selection is `ros2 control switch_controllers` in both environments.
 
 ---
 
-### Phase 3 — One controller name set, one gain table
+### Phases 3–5
 
-Naming scheme: `<command_interface>_<controller_type>`.
+Controller naming (3), the gripper seam (4) and the launch levels (5) are part of
+Phase 1.
 
-| Old (real) | Old (sim) | New |
-|---|---|---|
-| `effort_joint_trajectory_controller` | `joint_effort_traj_controller` | `effort_jtc` |
-| `vel_joint_trajectory_controller` | — (added) | `vel_jtc` |
-| — | `joint_pos_traj_controller` | `pos_jtc` |
-| — | `gripper_position_controller` | `pos_gripper` |
-| — | `gripper_effort_controller` | `effort_gripper` |
-| `joint_state_broadcaster` | `joint_state_broadcaster` | unchanged |
-| `franka_robot_state_broadcaster` | — | unchanged |
-| (future) | (future) | `cartesian_impedance` |
-
-Broadcasters keep upstream-conventional names. `fer_gripper` is a node name, not a
-controller. `cartesian_impedance` is a deliberate exception to interface-first
-naming: impedance control is unambiguously effort-based.
-
-**`fer_ros2_bringup`**
-- `config/controllers_common.yaml` — update rate, joint lists, JTC types, the effort
-  gain table, `joint_state_broadcaster`.
-- `config/controllers_real.yaml` — `franka_robot_state_broadcaster`, `arm_id: fer`.
-- `config/controllers_sim.yaml` — gripper controllers, PID gains.
-- `CMakeLists.txt` — remove every `find_package(... REQUIRED)` except `ament_cmake`.
-  The bringup then builds without MuJoCo and moves from `fer_sim.repos` to
-  `fer_core.repos`.
-- Delete `config/franka_mujoco_controllers.yaml`, including the dead
-  `cartesian_compliance_controller` and `motion_control_handle` blocks.
-
-`ros2_control_node` merges the list of param files.
-
-**`fer_moveit_config`**
-- `config/moveit_controllers.yaml` — new names; `vel_jtc` entry added.
-
----
-
-### Phase 4 — The gripper seam
-
-The real gripper is not a ros2_control controller. `franka_gripper_node` launches as
-`fer_gripper` and serves `/fer_gripper/gripper_action`.
-`moveit_simple_controller_manager` resolves `<controller_name>/<action_ns>`, so the
-real gripper is routable by configuration alone.
-
-**`fer_moveit_config`**
-- `config/moveit_controllers_real.yaml`:
-  ```yaml
-  fer_gripper: { type: GripperCommand, action_ns: gripper_action,
-                 joints: [fer_finger_joint1] }
-  ```
-- `config/moveit_controllers_sim.yaml` — `pos_gripper` / `effort_gripper`.
-- `launch/fer_moveit_launch.py` — select the fragment by `hardware`.
-
-`MoveItSimpleControllerManager` reports all listed controllers as ACTIVE, so a dead
-`fer_gripper` goes unnoticed; the real hardware fragment adds a liveness check.
-
-A gripper relay controller presenting one interface in both environments is the full
-fix and enables `width` / `epsilon` / `force` grasping. Deferred.
-
----
-
-### Phase 5 — Composable launch ladder
-
-The sim stack's laddering is kept and generalised: `hardware` becomes a parameter.
-
-Rule: a launch file starting nodes from one package lives in that package; a launch
-file composing several packages is a scenario and lives in `fer_ros2_bringup`.
-
-**Layer launches:**
-
-| File | Package | Starts |
-|---|---|---|
-| `moveit.launch.py` | `fer_moveit_config` | `move_group` and its RViz |
-| `fer_skills.launch.py` | `fer_skills` | skill server |
-| `bt_server.launch.py` | `fer_behavior_trees` | BT server |
-| `world_model.launch.py` | `fer_world_model` | planning-scene observer |
-| `hardware.launch.py` | `fer_ros2_bringup` | RSP, ros2_control, controllers, gripper |
-
-`hardware.launch.py` takes `hardware:=real|mujoco|mock` and delegates to
-`_hardware_real.launch.py`, `_hardware_mujoco.launch.py` or
-`_hardware_mock.launch.py`. Only the MuJoCo fragment references
-`mujoco_ros2_control`.
-
-**Scenario ladder in `fer_ros2_bringup`:**
-
-| File | Includes | Use |
-|---|---|---|
-| `fer_hardware.launch.py` | hardware | driver / sim bring-up, controller tuning |
-| `fer_moveit.launch.py` | + moveit | planning |
-| `fer_skills.launch.py` | + skills | skill-level testing |
-| `fer_full.launch.py` | + world_model + bt | full autonomy |
-
-Every rung takes `hardware:=`, passes it down, owns its own RViz and passes
-`use_rviz:=false` below. `use_sim_time` is derived from `hardware` and never
-defaulted.
-
-**Deleted:** `empty_world`, `fer_mujoco_ros2_control`, `fer_mujoco_moveit`,
-`fer_mjc_moveit_skills`, `fer_mjc_moveit_skills_bt` launch files.
-
-The `/joint_states` asymmetry is kept deliberate inside the hardware fragments: real
-aggregates `fer/joint_states` + `fer_gripper/joint_states` via
-`joint_state_publisher`; sim publishes directly from `joint_state_broadcaster`.
+A gripper relay controller presenting one interface in both environments remains
+deferred; it enables `width` / `epsilon` / `force` grasping.
 
 ---
 
@@ -530,7 +499,7 @@ aggregates `fer/joint_states` + `fer_gripper/joint_states` via
 Two levels. Component CI never relies on anything the platform imports.
 
 **Component CI — every component repo**
-- Imports only its own `dependencies.repos` (where present).
+- Externals it needs are taken at the pins in `fer_ros2_docker/fer_core.repos`.
 - `colcon build`, `colcon test`.
 - `lint` — `ament_flake8`, `ament_pep257`, `ament_uncrustify --reformat`,
   `ament_cpplint`.
@@ -541,12 +510,13 @@ Two levels. Component CI never relies on anything the platform imports.
 **Platform CI — `fer_ros2_docker`**
 - `build-core-sim`, `build-core-real`, `build-core-both` — fresh import per
   combination, image build.
-- `launch-mock` — core only; bring up `fer_moveit.launch.py hardware:=mock`, assert
-  controller_manager is up, controllers loaded, `/joint_states` publishing,
-  `move_group` active. `mock_components/GenericSystem` does not integrate effort, so
-  this test uses `pos_jtc`; effort behaviour is covered by sim and hardware
-  validation.
-- `manifest-consistency` — every `dependencies.repos` agrees with the platform pins.
+- `launch-mock` — adds `hardware:=mock` to `fer_ros2_bringup`
+  (`urdf/control/fer_mock.ros2_control.xacro`, `mock_components/GenericSystem`,
+  `fer_mock_ros2_control.launch.py`, `moveit_controllers_mock.yaml`). Core only;
+  bring up `fer_moveit.launch.py hardware:=mock`, activate
+  `position_trajectory_controller`, assert `/joint_states` publishing, `move_group`
+  active and a position trajectory executed. `GenericSystem` does not simulate
+  effort, so effort behaviour stays covered by sim and hardware validation.
 - `unique-package-names` — no package name appears twice across imported repos.
 - `dependency-direction` — package dependencies match §2.3.
 - `stale-names` — `grep` for retired controller names.
@@ -604,7 +574,7 @@ fer_skills_moveit      MTC / MoveGroup backend: maps the contract onto groups, l
 - `fer_skills_moveit` remains MoveIt-coupled by design; a second planning framework
   is a second backend package.
 - The FER-specific parameters (group names, TCP link, gripper limits) move to
-  `fer_ros2_bringup/config/skill_server_fer.yaml` and are passed by the skills rung.
+  `fer_ros2_bringup/config/skill_server_fer.yaml` and are passed by `fer_moveit_skills.launch.py`.
 - `fer_world_model` stays MoveIt-coupled; it observes `/monitored_planning_scene`.
 - A pluginlib backend interface is introduced only when a second backend exists.
 - `fer_skill_interfaces` is a public contract per §2.6.
@@ -616,13 +586,9 @@ fer_skills_moveit      MTC / MoveGroup backend: maps the contract onto groups, l
 | Phase | Content | Effort | Gate |
 |---|---|---|---|
 | 0 | promote `fer_ros2_docker`, profiles, renames | ~1 d | clean-clone builds, all three combinations |
-| 1 | upstream description + hardware overlays | ~1 d | diff against upstream empty, real robot moves |
+| 1 | one bringup: description, controllers, gripper seam, launch levels, `description-invariant` | ~2 d | CI green; every level starts in both environments; real robot moves |
 | 2 | sim all-interfaces | ~1 d | runtime controller switch works |
-| 6a | component CI + `launch-mock` | ~0.5 d | CI green |
-| 3 | controller merge | ~0.5 d | both environments unchanged |
-| 4 | gripper seam | ~0.5 d | MoveIt gripper works in both |
-| 5 | launch ladder | ~1 d | every rung standalone, both environments |
-| 6b | remaining platform CI | ~1.5 d | branch protection on |
+| 6 | mock backend, `launch-mock`, platform CI | ~2 d | branch protection on |
 | 7 | cleanup, archive | ~0.5 d | — |
 | 8 | skills redesign | ~3–4 d | BTs build without MoveIt; concurrent goals rejected |
 
@@ -633,11 +599,11 @@ fer_skills_moveit      MTC / MoveGroup backend: maps the contract onto groups, l
 | Risk | Mitigation |
 |---|---|
 | Phase 1 changes kinematics unnoticed | Blocking diff against upstream, permanent CI job |
-| Real robot regresses | Driver source untouched; hardware re-validation after Phases 1, 3, 5 |
-| Phase 1 lands in one repo but not the others | Changes to `fer_ros2_bringup`, `fer_moveit_config`, `fer_skills` and `fer_ros2_driver` merged together; `unique-package-names` CI |
+| Real robot regresses | Driver source untouched; real URDF compared against the former `fer_bringup` output; hardware re-validation after Phases 1 and 2 |
+| Phase 1 lands in one repo but not the others | Changes to `fer_ros2_bringup`, `fer_moveit_config`, `fer_ros2_driver` and the profiles merged together; `unique-package-names` CI |
 | Consumers pass different arguments to the upstream xacro | Arguments aligned in Phase 1; `description-invariant` CI compares against upstream |
 | Package-level dependency cycle | MoveIt and skills depend on upstream `franka_description`, never on the bringup; `dependency-direction` CI |
-| Position/velocity PID tuning poor | Effort mode is default; other modes inactive until tuned |
+| Position/velocity PID tuning poor | Every motion controller starts inactive; modes are switched on deliberately |
 | Retired controller name missed | `stale-names` CI |
 | Repo renames break clones and manifests | Profiles updated in the same step; GitHub redirects as a fallback only |
 | rosdep warnings mistaken for errors | Documented in the platform README; both profile builds in CI |
@@ -650,8 +616,8 @@ fer_skills_moveit      MTC / MoveGroup backend: maps the contract onto groups, l
 |---|---|---|
 | 1 | Floating `main` pins make the platform unreproducible | Dev profiles track branches; `vcs export --exact` into `releases/` |
 | 2 | Cross-repo changes merged out of order | Additive provider changes first; provider merges before consumer; identical feature-branch names, honoured by platform CI |
-| 3 | Component CI green only because the platform supplies a dependency | Component CI imports only its own `dependencies.repos` |
-| 4 | Two repos pin the same external differently | Platform owns every pin; `manifest-consistency` CI |
+| 3 | Component CI green only because a developer workspace supplies a dependency | Component CI starts from an empty runner and imports only the pins it needs from `fer_core.repos` |
+| 4 | Two repos pin the same external differently | Only the platform profiles carry pins; component repos have no `.repos` files |
 | 5 | Duplicate package names across repos | `unique-package-names` CI |
 | 6 | Interfaces in the wrong package create upward dependencies or cycles | Interfaces in the lowest layer that needs them; `dependency-direction` CI |
 | 7 | Unpushed or stale work hidden in ignored checkouts | `vcs status` and `vcs custom --git --args log --oneline @{u}..` before pushing |
@@ -668,14 +634,14 @@ failures are silent.
 
 ## 8. Invariants
 
-1. With `ros2_control:=false`, the bringup wrapper's URDF is byte-identical to
-   upstream `franka_description` for all `hardware` values.
+1. With overlays removed, the bringup's URDF equals upstream `franka_description`
+   for every `hardware` value (`description-invariant`).
 2. The platform builds with core+sim and with core+real; neither profile requires
    the other.
-3. The platform launches with core only (`hardware:=mock`).
-4. `fer_ros2_driver` builds from its own `dependencies.repos`.
+3. The platform launches with core only (`hardware:=mock`, from Phase 6).
+4. Every external has exactly one pin, in the platform profiles.
 5. One controller name set, one gain table, one description source (upstream), one
-   launch ladder.
+   set of launch levels.
 6. No package name exists twice; package dependencies follow §2.3.
 
 ---

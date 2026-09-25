@@ -620,7 +620,7 @@ contract per §2.6. Depends only on `action_msgs`, `builtin_interfaces`,
 
 Rules:
 - SI units. Gripper width is the full opening between the fingers.
-- Poses are `PoseStamped` in any TF frame. A server converts a pose to `fer_link0` once,
+- Poses are `PoseStamped` in any TF frame. A server converts a pose to `base` once,
   when it accepts the goal; a pose in `fer_hand_tcp` is relative to the hand at that
   moment.
 - An object pose is the center of its shape (`shape_msgs/SolidPrimitive` convention).
@@ -683,7 +683,7 @@ container.
   `DetectObjects`, `RefineObject`, `QueryObjects`, `SetObjectStatus`,
   `/world_model/objects` with `revision`. Subscribes `/perception/detections`
   (`vision_msgs/Detection3DArray`, stamped at capture, camera frame) and transforms with
-  TF at the detection stamp into `fer_link0`. Fixed objects (table) from
+  TF at the detection stamp into `base`. Fixed objects (table) from
   `config/fixtures.yaml`. No `moveit_msgs`.
 - Snapshot: the first detection message stamped after the request, taken with the arm
   at rest. The real `joint_state_publisher` runs at 30 Hz

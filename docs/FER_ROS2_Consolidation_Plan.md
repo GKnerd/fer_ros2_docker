@@ -1,7 +1,8 @@
-# FER ROS 2 — Sim/Real Consolidation Plan
+# FER ROS 2 — Sim/Real Consolidation and Platform Refactor Plan
 
-**Date:** 2026-09-16
-**Supersedes:** items #2 and #3 of `FER_ROS2_Review_2026-08-24.md`
+**Date:** 2026-09-25
+**Supersedes:** items #2 and #3 of `FER_ROS2_Review_2026-08-24.md`;
+`legacy/Skills_Refactor.md`; `legacy/Refactor_World_Model_Perception.md`
 
 ---
 
@@ -18,10 +19,12 @@ CI, multi-host deployment layout.
 
 **Out of scope:** SSM loop closure.
 
-**Follow-up after the consolidation:** skills redesign incl. arbitration (Phase 8).
+**Follow-up after the consolidation:** platform refactor — `fer_interfaces`, world
+model without MoveIt, gripper server, swappable motion backend, pick and place as
+behavior trees (Phase 8).
 
-**Deferred:** Cartesian impedance control, the wrench path (§11), the gripper relay
-controller (Phases 3–5), a mock hardware backend (Phase 6). Before the impedance controller is written, decide where its
+**Deferred:** Cartesian impedance control, the wrench path (§11), a mock hardware
+backend (Phase 6). Before the impedance controller is written, decide where its
 dynamics model comes from (§10).
 
 ---
@@ -106,7 +109,10 @@ Every phase is validated against both environments.
 | `fer_ros2_driver` | driver (renamed from `fer_ros2`) | `franka_hardware`, `franka_gripper`, `franka_msgs`, `franka_semantic_components`, `franka_robot_state_broadcaster`, `franka_bringup` (driver-only launch) |
 | `fer_ros2_bringup` | robot bringup for real and MuJoCo (new repo, grown from `fer_ros2/fer_bringup`) | `fer_ros2_bringup` |
 | `fer_moveit_config` | MoveIt configuration | `fer_moveit_config` |
-| `fer_skills` | skills | `fer_skills` (Phase 8: + `fer_skill_interfaces`, split server/backend) |
+| `fer_interfaces` | contract: msgs, services, actions (Phase 8) | `fer_interfaces` |
+| `fer_motion_moveit` | motion backend, MoveIt (Phase 8) | `fer_motion_moveit` |
+| `fer_gripper_server` | gripper server (Phase 8) | `fer_gripper_server` |
+| `fer_grasp_planner` | grasp candidates (Phase 8) | `fer_grasp_planner` |
 | `fer_behavior_trees` | behavior | `fer_behavior_trees` |
 | `fer_planning_world_model` | world model | `fer_world_model` |
 | `speed_and_separation_monitoring` | safety prototype | `speed_and_separation_monitoring` |
@@ -115,21 +121,27 @@ Every phase is validated against both environments.
 ### 2.3 Package dependency direction
 
 ```
-fer_behavior_trees ──> fer_skills ──> fer_moveit_config ──> franka_description (upstream)
-                           └─────────────────────────────> franka_description (upstream)
-fer_world_model ──> (moveit_msgs only)
+fer_behavior_trees ──┐
+fer_motion_moveit  ──┤
+fer_gripper_server ──┼──> fer_interfaces ──> standard message packages only
+fer_world_model    ──┤
+fer_grasp_planner  ──┘
+fer_motion_moveit ──> fer_moveit_config ──> franka_description (upstream)
+fer_world_model   ──> vision_msgs
 
 fer_ros2_bringup (launch levels) ──> franka_description, fer_moveit_config,
-                                     fer_skills, fer_behavior_trees, fer_world_model
+                                     fer_motion_moveit, fer_gripper_server,
+                                     fer_world_model, fer_grasp_planner, fer_behavior_trees
 fer_ros2_bringup (hardware)      ──runtime──> franka_hardware | mujoco_ros2_control
 franka_hardware ──> libfranka
 ```
 
 The robot description is upstream `franka_description`, used unmodified. Every
 consumer builds from `franka_description/robots/fer/fer.urdf.xacro`.
-`fer_moveit_config` and `fer_skills` use it directly; `fer_ros2_bringup` includes it
-and adds only hardware overlays (§3.2). MoveIt and the skills therefore never depend
-on the bringup.
+`fer_moveit_config` and `fer_motion_moveit` use it directly; `fer_ros2_bringup`
+includes it and adds only hardware overlays (§3.2). MoveIt and the motion backend
+therefore never depend on the bringup. `fer_motion_moveit` is the only package above
+ros2_control that depends on MoveIt.
 
 `fer_ros2_bringup` is the integration package: it sits at the top and depends on
 everything else. Nothing depends on it.
@@ -146,9 +158,13 @@ package; it never depends on application internals.
 | `GKnerd/fer_ros2_bringup` | new; `fer_bringup` extended to both backends (Phase 1) |
 | `GKnerd/fer_ros2_mjc_bringup` | contents merged into `fer_ros2_bringup`, then archived |
 | `GKnerd/fer_moveit_config` | one controller mapping per hardware (Phase 1) |
-| `GKnerd/fer_skills` | unchanged until Phase 8 |
-| `GKnerd/fer_behavior_trees` | unchanged |
-| `GKnerd/fer_planning_world_model` | unchanged |
+| `GKnerd/fer_skills` | archived after Phase 8 |
+| `GKnerd/fer_behavior_trees` | rewritten against `fer_interfaces` (Phase 8) |
+| `GKnerd/fer_planning_world_model` | MoveIt removed (Phase 8) |
+| `GKnerd/fer_interfaces` | new (Phase 8) |
+| `GKnerd/fer_motion_moveit` | new (Phase 8) |
+| `GKnerd/fer_gripper_server` | new (Phase 8) |
+| `GKnerd/fer_grasp_planner` | new (Phase 8) |
 | `GKnerd/speed_and_separation_monitoring` | unchanged |
 | `GKnerd/fer_ros2_simulation` | infra and docs copied into `fer_ros2_docker`, then archived |
 | `GKnerd/fer_ws` | archived (trial monorepo, superseded) |
@@ -165,7 +181,10 @@ fer_core.repos    ros2_ws/src/franka_description
                   ros2_ws/src/BehaviorTree.ROS2
                   ros2_ws/src/fer_ros2_bringup
                   ros2_ws/src/fer_moveit_config
-                  ros2_ws/src/fer_skills
+                  ros2_ws/src/fer_interfaces
+                  ros2_ws/src/fer_motion_moveit
+                  ros2_ws/src/fer_gripper_server
+                  ros2_ws/src/fer_grasp_planner
                   ros2_ws/src/fer_behavior_trees
                   ros2_ws/src/fer_planning_world_model
                   ros2_ws/src/speed_and_separation_monitoring
@@ -219,7 +238,7 @@ profile's keys with a warning.
 
 ### 2.6 Conventions
 
-- **Branches:** `main` for development in every repo; `jazzy-<version>` tags for
+- **Branches:** `jazzy_devel` for development in every repo; `jazzy-<version>` tags for
   releases.
 - **Versioning:** semver tags and `CHANGELOG.md` per repo.
 - **Contracts are public APIs.** Action/msg definitions, the `hardware:=` backends,
@@ -245,7 +264,8 @@ profile's keys with a warning.
     ├── config/       nic_orin_config.sh
     ├── docs/         all project docs: this plan, the review, the handoff,
     │                 robotics_stack.md, DDS_Profiles.md,
-    │                 cross_host_contract.md (§9), legacy/README_{real,sim}.md
+    │                 cross_host_contract.md (§9),
+    │                 legacy/ (former READMEs and superseded plans)
     ├── releases/                        ← vcs export --exact snapshots
     ├── .github/workflows/               ← Phase 6
     ├── fer_core.repos  fer_real.repos  fer_sim.repos
@@ -274,9 +294,9 @@ fer_ros2_bringup/                        ← repo = package
 ├── launch/
 │   ├── fer_real_ros2_control.launch.py
 │   ├── fer_mujoco_ros2_control.launch.py
-│   ├── fer_moveit.launch.py
-│   ├── fer_moveit_skills.launch.py
-│   └── fer_moveit_skills_bt.launch.py
+│   ├── fer_moveit.launch.py                 ← manual planning in RViz only
+│   ├── fer_manipulation.launch.py           ← Phase 8.6
+│   └── fer_manipulation_bt.launch.py        ← Phase 8.6
 ├── scenes/base_world.xml
 ├── rviz/fer_real.rviz  rviz/fer_mujoco.rviz
 ├── test/test_description.py
@@ -489,8 +509,8 @@ selection is `ros2 control switch_controllers` in both environments.
 Controller naming (3), the gripper seam (4) and the launch levels (5) are part of
 Phase 1.
 
-A gripper relay controller presenting one interface in both environments remains
-deferred; it enables `width` / `epsilon` / `force` grasping.
+One gripper interface for both environments, with width, tolerance and force, is
+`fer_gripper_server` (Phase 8.2).
 
 ---
 
@@ -512,17 +532,17 @@ Two levels. Component CI never relies on anything the platform imports.
   combination, image build.
 - `launch-mock` — adds `hardware:=mock` to `fer_ros2_bringup`
   (`urdf/control/fer_mock.ros2_control.xacro`, `mock_components/GenericSystem`,
-  `fer_mock_ros2_control.launch.py`, `moveit_controllers_mock.yaml`). Core only;
-  bring up `fer_moveit.launch.py hardware:=mock`, activate
-  `position_trajectory_controller`, assert `/joint_states` publishing, `move_group`
-  active and a position trajectory executed. `GenericSystem` does not simulate
+  `fer_mock_ros2_control.launch.py`). Core only; bring up
+  `fer_manipulation.launch.py hardware:=mock` with
+  `arm_controller:=position_trajectory_controller`, assert `/joint_states` publishing
+  and a `MoveToJoints` goal executed. `GenericSystem` does not simulate
   effort, so effort behaviour stays covered by sim and hardware validation.
 - `unique-package-names` — no package name appears twice across imported repos.
 - `dependency-direction` — package dependencies match §2.3.
 - `stale-names` — `grep` for retired controller names.
 - `images` — Docker images built from a fresh import, never from a local tree.
 
-Branch protection on `main` in every repo requires its CI.
+Branch protection on `jazzy_devel` in every repo requires its CI.
 
 Hardware behaviour — real-time, reflexes, error recovery — is not covered by CI and
 stays a manual validation step. Covering it requires a self-hosted runner on the
@@ -536,48 +556,263 @@ After Phases 1–6 are green and both robots are re-validated.
 
 - Delete dead multi-arm configs and launch files in
   `fer_ros2_driver/franka_bringup/{config,launch}/{mixed,real}/` (`dual_*`, `mixed_*`).
-- Align default branches to `main` (§2.6).
+- Align default branches to `jazzy_devel` (§2.6).
 - Delete `GKnerd/fer_speed_and_separation_monitoring`.
 - `fer_ros2_simulation` README note before archiving:
-  *"Superseded by GKnerd/fer_ros2_docker on `<date>`. Archived."*
+  *"Superseded by GKnerd/fer_ros2_docker. Archived."*
 
 ---
 
-### Phase 8 — Skills redesign (follow-up)
+### Phase 8 — Platform refactor: interfaces, world model, gripper, motion, trees
 
-`fer_skills` fuses three layers — contract, server, backend — so the MoveIt/MTC
-coupling of the backend leaks into every caller.
+`fer_skills` fuses contract, server and MoveIt/MTC backend, so MoveIt leaks into every
+caller. The world model mirrors MoveIt's planning scene, and the gripper is a segment
+of an MTC trajectory. Phase 8 replaces the skill server with small servers behind one
+interface package, makes the world model the planner-independent source of truth, and
+moves task composition into the behavior trees.
 
 **Current issues**
 
 | Issue | Effect |
 |---|---|
 | Action definitions live in the MTC package | `fer_behavior_trees` depends on MoveIt and MTC to obtain message types |
-| Robot values in the skills config (`fer_arm`, `fer_hand`, named states `"open"` / `"close"`) | Every robot change touches `fer_skills` |
-| Gripper driven through SRDF named states | The contract cannot express width, epsilon or force |
-| Server and backend are one object (`SkillServer` holds `picker_` / `placer_` MTC tasks) | No arbitration, no backend swap; concurrent goals collide |
-| `hand_group` passed where a link name is expected (`mtc_pick_object.cpp:80`) | Planning group and link conflated; works only because the names coincide |
+| Pick and Place are one MTC plan executed by `move_group` | No step between approach and grasp can be changed from a tree; the gripper has no result of its own |
+| Gripper driven through SRDF named states | Width, tolerance and force cannot be expressed; `close` = 0.0 makes franka `grasp()` report failure while holding an object |
+| Server and backend are one object (`SkillServer` holds `picker_` / `placer_` MTC tasks) | No backend swap; concurrent goals collide |
+| Perception writes `CollisionObject`s to `/planning_scene`; the world model mirrors `/monitored_planning_scene` | Every detector must know MoveIt; trees carry object ids as literals |
 
-**Target design — in the `fer_skills` repo**
+**Target**
 
 ```
-fer_skill_interfaces   neutral contract: frames, poses, object IDs, gripper width/force;
-                       no group names, no named states, no MoveIt types
-fer_skill_server       goal handling, validation, arbitration (one motion at a time),
-                       dispatch to a backend through a small C++ interface
-fer_skills_moveit      MTC / MoveGroup backend: maps the contract onto groups, links,
-                       MTC stages; robot values arrive as parameters
+fer_behavior_trees        order, choices, retries, reactions to world changes
+  │  fer_interfaces
+  ├─► motion backend      /motion/*        plans and executes arm motion; one package per planner
+  ├─► fer_gripper_server  /gripper/*       gripper commands, grasp evidence → object status
+  ├─► fer_world_model     /world_model/*   objects: identity, pose, shape, status
+  └─► fer_grasp_planner   /grasp/*         grasp candidates for an object
+ros2_control              controllers, loaded inactive, activated by the server that needs them
 ```
 
-- `fer_behavior_trees` depends on `fer_skill_interfaces` only and becomes
-  independent of MoveIt and of the robot.
-- `fer_skills_moveit` remains MoveIt-coupled by design; a second planning framework
-  is a second backend package.
-- The FER-specific parameters (group names, TCP link, gripper limits) move to
-  `fer_ros2_bringup/config/skill_server_fer.yaml` and are passed by `fer_moveit_skills.launch.py`.
-- `fer_world_model` stays MoveIt-coupled; it observes `/monitored_planning_scene`.
-- A pluginlib backend interface is introduced only when a second backend exists.
-- `fer_skill_interfaces` is a public contract per §2.6.
+- The tree never sees a trajectory, a planner name or a controller name.
+- Pick and Place are behavior-tree SubTrees built from these actions. No server holds a
+  pick sequence.
+- Another motion backend (e.g. MPC) is another package serving the same names; launch
+  selects one.
+
+**Contract — `fer_interfaces`** (repo `fer_interfaces`, branch `jazzy_devel`), a public
+contract per §2.6. Depends only on `action_msgs`, `builtin_interfaces`,
+`geometry_msgs`, `shape_msgs`, `std_msgs`.
+
+| Interface | Kind | Name | Served by | Called by |
+|---|---|---|---|---|
+| `MoveToPose` | action | `/motion/move_to_pose` | motion backend | BT |
+| `MoveToJoints` | action | `/motion/move_to_joints` | motion backend | BT |
+| `CheckReachable` | service | `/motion/check_reachable` | motion backend | BT |
+| `MoveGripper` | action | `/gripper/move` | `fer_gripper_server` | BT |
+| `Grasp` | action | `/gripper/grasp` | `fer_gripper_server` | BT |
+| `Release` | action | `/gripper/release` | `fer_gripper_server` | BT |
+| `DetectObjects` | action | `/world_model/detect_objects` | `fer_world_model` | BT |
+| `RefineObject` | action | `/world_model/refine_object` | `fer_world_model` | BT |
+| `QueryObjects` | service | `/world_model/query_objects` | `fer_world_model` | BT, motion backend, gripper server, grasp planner |
+| `SetObjectStatus` | service | `/world_model/set_object_status` | `fer_world_model` | `fer_gripper_server` |
+| `GetGraspCandidates` | service | `/grasp/candidates` | `fer_grasp_planner` | BT |
+| `WorldObjectArray` | topic, latched | `/world_model/objects` | `fer_world_model` | RViz, monitoring |
+
+Rules:
+- SI units. Gripper width is the full opening between the fingers.
+- Poses are `PoseStamped` in any TF frame. A server converts a pose to `fer_link0` once,
+  when it accepts the goal; a pose in `fer_hand_tcp` is relative to the hand at that
+  moment.
+- An object pose is the center of its shape (`shape_msgs/SolidPrimitive` convention).
+- Every result starts with `Outcome`. Trees branch on `outcome.code`, never on
+  `message`.
+- A new goal on a server replaces the running one; the old goal ends `CANCELLED`.
+- Only detection and `fer_gripper_server` write to the world model. Trees read.
+- The blackboard holds object ids, never copies of objects.
+
+**Enforcement**, in this order: message types, server validation, contract tests.
+- The types exclude two targets in one goal (`MoveToPose` / `MoveToJoints`), a straight
+  path to a joint target, partial joint lists (`float64[7]`), and detect/refine
+  combinations (`DetectObjects` / `RefineObject`).
+- Servers reject the rest:
+
+| Rule | Checked by | Outcome |
+|---|---|---|
+| `speed_scaling` in (0, 1] | motion backend | `INVALID_GOAL` |
+| gripper width in [0, 0.08] m | gripper server | `INVALID_GOAL` |
+| pose frame unknown to TF | motion backend | `INVALID_GOAL` |
+| unknown object id (`may_touch`, `object_id`) | motion backend, gripper server, world model | `NOT_FOUND` |
+| `Grasp` on a non-FREE object, `Release` on a non-GRASPED object, `RefineObject` on a GRASPED object | gripper server, world model | `INVALID_STATE` |
+
+- Each server package has a contract test that sends valid and invalid goals and checks
+  the outcomes. Every implementation of an interface — MoveIt or MPC backend, real or
+  sim gripper — passes the same test.
+
+**Testing** — every Phase 8 package.
+- Package layout: `core/` (no ROS imports), `adapters/` (hardware or other nodes, behind
+  a small interface), a thin node.
+- Unit tests on `core/`: pytest, gtest. Node tests: the node plus fake neighbours in one
+  process. Integration: `launch_testing` on `hardware:=mock` (Phase 6) or MuJoCo.
+- Tests never share the robot's DDS domain: C++ uses `ament_add_ros_isolated_gtest`
+  (`ament_cmake_ros`); Python uses a `conftest.py` that sets a unique `ROS_DOMAIN_ID`
+  and `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` before `rclpy.init`.
+- A sub-phase is done when `colcon test` passes for its packages. Lint per Phase 6.
+
+Old and new stack run side by side until 8.6.
+
+#### 8.0 Groundwork
+
+- `fer_interfaces` joins `fer_core.repos` (`jazzy_devel`).
+- `fer_interfaces/README.md`: the interface table above.
+- `docker/Dockerfile`: `ros-jazzy-vision-msgs`.
+- Test isolation: the first `conftest.py` is written in `fer_planning_world_model`
+  (8.1); later Python packages copy it. C++ packages use
+  `ament_add_ros_isolated_gtest`.
+
+**Verification:** fresh import and image build; `fer_interfaces` builds in the
+container.
+
+#### 8.1 World model without MoveIt — `fer_planning_world_model` (Python)
+
+- `core/`: the object schema gains `class_id`, `score`, `source`, `fixed` and status
+  LOST. New `association.py`: a detection matches a FREE object of the same class within
+  a gating distance, otherwise gets a new id `<class>_<n>`; the world model owns ids.
+  GRASPED objects are never changed by detections. An object not seen is never removed
+  or changed; it is reported in `not_seen`.
+- `planning_scene_world_model_server.py` rewritten against `fer_interfaces`:
+  `DetectObjects`, `RefineObject`, `QueryObjects`, `SetObjectStatus`,
+  `/world_model/objects` with `revision`. Subscribes `/perception/detections`
+  (`vision_msgs/Detection3DArray`, stamped at capture, camera frame) and transforms with
+  TF at the detection stamp into `fer_link0`. Fixed objects (table) from
+  `config/fixtures.yaml`. No `moveit_msgs`.
+- Snapshot: the first detection message stamped after the request, taken with the arm
+  at rest. The real `joint_state_publisher` runs at 30 Hz
+  (`fer_real_ros2_control.launch.py`), so TF at the stamp is inaccurate while the arm
+  moves. `RefineObject` is taken from a viewing pose within the D405 range (7–50 cm).
+- New node `mock_perception`: publishes `Detection3DArray` from YAML (class, center
+  pose, size; no ids).
+- `mock_camera_node.py` and `planning_scene_adapter.py` stay for the old stack until
+  8.7.
+
+**Verification:** pytest for association, status rules and not-seen handling; CLI
+detect → query → set status → refine; `package.xml` contains no `moveit_*`.
+
+#### 8.2 Gripper — `fer_gripper_server` (new repo, Python)
+
+- Serves `MoveGripper`, `Grasp`, `Release`. One adapter per hardware, selected by
+  parameter:
+  - real: `/fer_gripper/move`, `/fer_gripper/grasp` (width, epsilon = `tolerance`,
+    speed from config, force); width from `/fer_gripper/joint_states`;
+  - mujoco: `control_msgs/GripperCommand` on `gripper_effort_controller` (position =
+    width / 2, `max_effort` = force); the node checks width and tolerance itself and
+    activates `gripper_effort_controller` at startup.
+- `Grasp`: object must be FREE. Success when the measured width is within `tolerance`
+  of `width` and above `min_hold_width` → `SetObjectStatus` GRASPED, `held_by`
+  `fer_hand_tcp`, pose relative to the hand. Failure → reopen to the width before
+  closing, `GRASP_FAILED`, world model unchanged.
+- `Release`: object must be GRASPED. Open, confirm the width, then `SetObjectStatus`
+  FREE at the hand pose combined with the stored offset, `source` `release_estimate`.
+
+**Verification:** contract test; `Grasp` on nothing → `GRASP_FAILED`, gripper reopened,
+world model unchanged; `Grasp` on an object → GRASPED; `Release` → FREE. Sim and real.
+
+#### 8.3 Motion — `fer_motion_moveit` (new repo, C++)
+
+- Serves `MoveToPose`, `MoveToJoints`, `CheckReachable`. MoveIt runs in-process through
+  MoveItCpp; no `move_group`.
+- Per request: `QueryObjects` snapshot → collision scene (FREE and fixed objects as
+  primitives, GRASPED objects attached to `held_by`, `may_touch` allows hand-link
+  contact with the listed objects for this request only) → plan with OMPL for
+  `PATH_FREE` and Pilz LIN for `PATH_STRAIGHT` → time parameterization with
+  `speed_scaling` → start state checked against `/joint_states` →
+  `FollowJointTrajectory` to the configured arm controller.
+- `CheckReachable` plans the chained targets without executing and returns the
+  configuration at each target.
+- Activates `arm_controller` (parameter: `effort_trajectory_controller` |
+  `position_trajectory_controller`) through `/controller_manager/switch_controller` at
+  startup.
+- Cancel → cancel the controller goal; `CANCELLED` once the arm is at rest.
+- `ROBOT_ERROR` from the robot mode reported by `franka_robot_state_broadcaster`
+  (real).
+- The planning pipeline keeps a start-state fix: the closed real gripper reports
+  −2.6e‑6, below its joint limit.
+- Publishes the planning scene for RViz. Robot description, SRDF, kinematics and
+  pipeline parameters from `fer_moveit_config`.
+- New `fer_moveit_config/config/moveit_cpp.yaml`: planning scene monitor options and
+  the planning pipelines (OMPL, Pilz) for MoveItCpp. `move_group` has no equivalent
+  file.
+- To check: how the JTC stops a cancelled goal at speed (hold or deceleration).
+
+**Verification:** contract test; unit tests with the robot model and a fake
+`FollowJointTrajectory` server; sim: joints → home, pose with free path, pose with
+straight path, `CheckReachable` returns 7 values per target, cancel mid-motion; real at
+low speed; `launch-mock` once Phase 6 exists.
+
+#### 8.4 Grasp candidates — `fer_grasp_planner` (new repo, Python)
+
+- Serves `GetGraspCandidates`. Top-down candidates from the object's box: width from
+  the box, pre-grasp above the grasp along the approach, lift above the grasp, force
+  per class from `config/object_catalog.yaml`.
+- A grasp network later replaces the computation behind the same service. It runs on
+  the perception host (§9), crops the newest point cloud to the object's box, and
+  converts its gripper frame to `fer_hand_tcp` (0.1034 m offset).
+
+**Verification:** pytest for the geometry; candidates for a mock object shown in RViz;
+`CheckReachable` passes for at least one.
+
+#### 8.5 Behavior trees — `fer_behavior_trees`
+
+- One node per interface: `MoveToPose`, `MoveToJoints`, `MoveGripper`, `Grasp`,
+  `Release`, `DetectObjects`, `RefineObject`, `QueryObjects`, `GetGraspCandidates`;
+  each writes `outcome.code` to an output port. `FindReachableGrasp` calls
+  `CheckReachable` per candidate (pre-grasp free → grasp straight → lift straight) and
+  outputs the first passing candidate with its pre-grasp configuration.
+- `Pick` and `Place` SubTrees; `pick_place.xml` loops over `QueryObjects` results with
+  `LoopString`.
+- `Pick` sequence: `MoveToJoints` to the view pose → `RefineObject` →
+  `GetGraspCandidates` → `FindReachableGrasp` → `MoveGripper` open → `MoveToJoints` to
+  the pre-grasp configuration → `MoveToPose` straight to the grasp with `may_touch` →
+  `Grasp` (on failure: `MoveToPose` straight back to the pre-grasp, then fail) →
+  `MoveToPose` straight to the lift pose.
+- The pre-grasp is reached with `MoveToJoints`, not `MoveToPose`: the arm has 7
+  joints, so a pose alone can end in a different arm configuration than the one
+  `CheckReachable` tested, from which the straight approach may fail.
+- Goal payload (JSON) → global blackboard (e.g. `target_class`). Keys of the previous
+  goal are cleared; a malformed payload is rejected.
+- The blackboard holds ids only. Place targets are fixed poses in the tree. Named poses
+  (`home`, `view`) come from `config/poses.yaml`.
+- Depends on `fer_interfaces` only.
+
+**Verification:** tree tests with fake nodes (`Grasp` fails → `Pick` backs out and
+fails); sim pick-and-place with mock perception and no object id in XML; one failed
+grasp recovers.
+
+#### 8.6 Bringup — `fer_ros2_bringup`
+
+| File | Adds |
+|---|---|
+| `fer_real_ros2_control.launch.py` / `fer_mujoco_ros2_control.launch.py` | description, RSP, ros2_control, controllers (inactive), gripper |
+| `fer_manipulation.launch.py` | world model, `perception:=mock\|none`, grasp planner, gripper server, motion backend |
+| `fer_manipulation_bt.launch.py` | BT server |
+
+- `hardware` reaches every node that differs by hardware.
+- `move_group` and `fer_skills` are not started.
+
+**Verification:** the same tree on `hardware:=mujoco` and `hardware:=real`.
+
+#### 8.7 Removal
+
+- `fer_skills` leaves `fer_core.repos`; the repo is archived.
+- `fer_behavior_trees`: old client nodes and trees removed.
+- `fer_planning_world_model`: `mock_camera_node.py`, `planning_scene_adapter.py`
+  removed.
+- `fer_ros2_bringup`: `fer_moveit_skills.launch.py`, `fer_moveit_skills_bt.launch.py`
+  removed; `fer_moveit.launch.py` stays for manual planning in RViz.
+- `robotics_stack.md` updated.
+
+**Deferred** — the interfaces already allow them: grasp network, D405 perception node,
+grasp monitor (§11 wrench, drops → LOST), continuous perception, handover and a
+streaming motion contract (§10), MPC backend, compliant control.
 
 ---
 
@@ -590,7 +825,7 @@ fer_skills_moveit      MTC / MoveGroup backend: maps the contract onto groups, l
 | 2 | sim all-interfaces | ~1 d | runtime controller switch works |
 | 6 | mock backend, `launch-mock`, platform CI | ~2 d | branch protection on |
 | 7 | cleanup, archive | ~0.5 d | — |
-| 8 | skills redesign | ~3–4 d | BTs build without MoveIt; concurrent goals rejected |
+| 8 | platform refactor (8.0–8.7) | ~3 wk | pick and place runs on sim and real through `fer_interfaces`; `colcon test` green in every Phase 8 package; `fer_skills` archived |
 
 ---
 
@@ -602,11 +837,13 @@ fer_skills_moveit      MTC / MoveGroup backend: maps the contract onto groups, l
 | Real robot regresses | Driver source untouched; real URDF compared against the former `fer_bringup` output; hardware re-validation after Phases 1 and 2 |
 | Phase 1 lands in one repo but not the others | Changes to `fer_ros2_bringup`, `fer_moveit_config`, `fer_ros2_driver` and the profiles merged together; `unique-package-names` CI |
 | Consumers pass different arguments to the upstream xacro | Arguments aligned in Phase 1; `description-invariant` CI compares against upstream |
-| Package-level dependency cycle | MoveIt and skills depend on upstream `franka_description`, never on the bringup; `dependency-direction` CI |
+| Package-level dependency cycle | MoveIt config and motion backend depend on upstream `franka_description`, never on the bringup; `dependency-direction` CI |
 | Position/velocity PID tuning poor | Every motion controller starts inactive; modes are switched on deliberately |
 | Retired controller name missed | `stale-names` CI |
 | Repo renames break clones and manifests | Profiles updated in the same step; GitHub redirects as a fallback only |
 | rosdep warnings mistaken for errors | Documented in the platform README; both profile builds in CI |
+| A test goal reaches the real robot (host network, one DDS domain) | Every test runs in an isolated DDS domain (Phase 8, Testing) |
+| Old and new stack diverge during Phase 8 | Both run side by side until 8.6; the old stack is removed only after the same tree passes on sim and real |
 
 ---
 
@@ -692,7 +929,8 @@ other hosts.
   the FCI interface to the robot.
 - Where multicast is blocked, the Cyclone configs list peers explicitly.
 - Heavy data stays on the host that produces it: perception sends results (object
-  poses), not raw point clouds. Images crossing the network use `image_transport`
+  poses), not raw point clouds. `fer_grasp_planner` therefore runs on the perception
+  host; only grasp candidates cross the network. Images crossing the network use `image_transport`
   compression; DDS socket buffers per `docs/DDS_Profiles.md`.
 - `rmw_zenoh` is the fallback if DDS discovery across the network proves unreliable.
 
@@ -718,7 +956,7 @@ The document is a public contract per §2.6.
 - **Everything above the driver is FER-specific in configuration.** A second robot
   needs its own upstream description, hardware overlays, bringup and MoveIt config; FR3 additionally needs a
   different libfranka and cannot share a workspace with the Panda driver.
-- **The skill contract is goal-terminated.** Condition-terminated and reactive
+- **The motion contract is goal-terminated.** Condition-terminated and reactive
   behaviour (tracking, handover, SSM speed scaling, MoveIt Servo) needs a streaming
   contract and a speed-scaling hook in the control path.
 - **The driver is frozen on libfranka 0.9.2.** Distro and toolchain upgrades may
@@ -731,7 +969,7 @@ The document is a public contract per §2.6.
 ## 11. The wrench contract
 
 The sim/real contract is a standard ROS message, never a vendor message. Consumers —
-SSM, contact detection, skills — depend on `geometry_msgs/WrenchStamped`, never on
+SSM, contact detection, the grasp monitor — depend on `geometry_msgs/WrenchStamped`, never on
 `franka_msgs`, which stays in `fer_ros2_driver`.
 
 **Sim.** `register_sensors()` (`mujoco_system_interface.cpp:2334`) reads `<sensor>`

@@ -7,7 +7,7 @@ Date: 2026-08-24
 - Franka Emika Robot (FER), `libfranka` version $0.9.2$
 - Jetson Orin AGX 64GB - PC driving FER with Real Time Kernel and modified Network Interface Card (NIC) settings:
 - 3D LiDAR: Seyond Robin W / Falcon K - Workstation Monitoring 
-- Intel Realsense D455 - Flange mounted, used for object detection and manipulation of detected objects.
+- Intel Realsense D405 - Flange mounted, used for object detection and manipulation of detected objects.
 - HTC Vive Trackers - Low-cost solution for a MoCap, so that human joint poses can be captured.
 
 ## Software Architecture

@@ -36,4 +36,4 @@ repositories:
   ros2_ws/src/fer_interfaces:
     type: git
     url: https://github.com/GKnerd/fer_interfaces.git
-    version: main
+    version: jazzy_devel

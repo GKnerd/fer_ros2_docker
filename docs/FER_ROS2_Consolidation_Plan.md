@@ -108,13 +108,12 @@ Every phase is validated against both environments.
 | `fer_ros2_docker` | meta-repo (promoted) | none |
 | `fer_ros2_driver` | driver (renamed from `fer_ros2`) | `franka_hardware`, `franka_gripper`, `franka_msgs`, `franka_semantic_components`, `franka_robot_state_broadcaster`, `franka_bringup` (driver-only launch) |
 | `fer_ros2_bringup` | robot bringup for real and MuJoCo (new repo, grown from `fer_ros2/fer_bringup`) | `fer_ros2_bringup` |
-| `fer_moveit_config` | MoveIt configuration | `fer_moveit_config` |
+| `fer_moveit_config` | MoveIt configuration and the MoveIt motion backend `fer_moveit_motion_server` (Phase 8; renamed after Phase 8) | `fer_moveit_config` |
 | `fer_interfaces` | contract: msgs, services, actions (Phase 8) | `fer_interfaces` |
-| `fer_motion_moveit` | motion backend, MoveIt (Phase 8) | `fer_motion_moveit` |
 | `fer_gripper_server` | gripper server (Phase 8) | `fer_gripper_server` |
 | `fer_grasp_planner` | grasp candidates (Phase 8) | `fer_grasp_planner` |
 | `fer_behavior_trees` | behavior | `fer_behavior_trees` |
-| `fer_planning_world_model` | world model | `fer_world_model` |
+| `fer_world_model` | world model | `fer_world_model` |
 | `speed_and_separation_monitoring` | safety prototype | `speed_and_separation_monitoring` |
 | `fer_perception` | perception (future) | — |
 
@@ -122,26 +121,28 @@ Every phase is validated against both environments.
 
 ```
 fer_behavior_trees ──┐
-fer_motion_moveit  ──┤
+fer_moveit_config  ──┤
 fer_gripper_server ──┼──> fer_interfaces ──> standard message packages only
 fer_world_model    ──┤
 fer_grasp_planner  ──┘
-fer_motion_moveit ──> fer_moveit_config ──> franka_description (upstream)
+fer_moveit_config ──> franka_description (upstream), MoveIt (move_group, moveit_msgs)
 fer_world_model   ──> vision_msgs
 
 fer_ros2_bringup (launch levels) ──> franka_description, fer_moveit_config,
-                                     fer_motion_moveit, fer_gripper_server,
-                                     fer_world_model, fer_grasp_planner, fer_behavior_trees
+                                     fer_gripper_server, fer_world_model,
+                                     fer_grasp_planner, fer_behavior_trees
 fer_ros2_bringup (hardware)      ──runtime──> franka_hardware | mujoco_ros2_control
+fer_gripper_server (hardware:=real) ──runtime──> franka_msgs
+fer_moveit_config (hardware:=real)  ──build, if present──> franka_msgs
 franka_hardware ──> libfranka
 ```
 
 The robot description is upstream `franka_description`, used unmodified. Every
 consumer builds from `franka_description/robots/fer/fer.urdf.xacro`.
-`fer_moveit_config` and `fer_motion_moveit` use it directly; `fer_ros2_bringup`
-includes it and adds only hardware overlays (§3.2). MoveIt and the motion backend
-therefore never depend on the bringup. `fer_motion_moveit` is the only package above
-ros2_control that depends on MoveIt.
+`fer_moveit_config` uses it directly; `fer_ros2_bringup` includes it and adds only
+hardware overlays (§3.2). MoveIt and the motion backend therefore never depend on the
+bringup. `fer_moveit_config`, which holds the MoveIt motion backend, is the only package
+above ros2_control that depends on MoveIt.
 
 `fer_ros2_bringup` is the integration package: it sits at the top and depends on
 everything else. Nothing depends on it.
@@ -157,12 +158,11 @@ package; it never depends on application internals.
 | `GKnerd/fer_ros2` | renamed → `fer_ros2_driver`; loses `fer_bringup` (Phase 1) |
 | `GKnerd/fer_ros2_bringup` | new; `fer_bringup` extended to both backends (Phase 1) |
 | `GKnerd/fer_ros2_mjc_bringup` | contents merged into `fer_ros2_bringup`, then archived |
-| `GKnerd/fer_moveit_config` | one controller mapping per hardware (Phase 1) |
+| `GKnerd/fer_moveit_config` | one controller mapping per hardware (Phase 1); hosts the MoveIt motion backend (8.3); renamed after Phase 8 |
 | `GKnerd/fer_skills` | archived after Phase 8 |
 | `GKnerd/fer_behavior_trees` | rewritten against `fer_interfaces` (Phase 8) |
-| `GKnerd/fer_planning_world_model` | MoveIt removed (Phase 8) |
+| `GKnerd/fer_world_model` | renamed from `fer_planning_world_model`; MoveIt removed (8.1) |
 | `GKnerd/fer_interfaces` | new (Phase 8) |
-| `GKnerd/fer_motion_moveit` | new (Phase 8) |
 | `GKnerd/fer_gripper_server` | new (Phase 8) |
 | `GKnerd/fer_grasp_planner` | new (Phase 8) |
 | `GKnerd/speed_and_separation_monitoring` | unchanged |
@@ -182,11 +182,10 @@ fer_core.repos    ros2_ws/src/franka_description
                   ros2_ws/src/fer_ros2_bringup
                   ros2_ws/src/fer_moveit_config
                   ros2_ws/src/fer_interfaces
-                  ros2_ws/src/fer_motion_moveit
                   ros2_ws/src/fer_gripper_server
                   ros2_ws/src/fer_grasp_planner
                   ros2_ws/src/fer_behavior_trees
-                  ros2_ws/src/fer_planning_world_model
+                  ros2_ws/src/fer_world_model
                   ros2_ws/src/speed_and_separation_monitoring
 
 fer_real.repos    deps/libfranka
@@ -232,7 +231,11 @@ Component repos carry no `.repos` files; component CI that needs an external
 frozen with `vcs export --exact` into `releases/<date-or-tag>.repos`.
 
 **Dependency declaration.** `fer_ros2_bringup` declares `mujoco_ros2_control` and
-`franka_gripper` as plain `<exec_depend>`. The Dockerfile runs
+`franka_gripper` as plain `<exec_depend>`. `fer_gripper_server` declares `franka_msgs`
+the same way and imports it only for `hardware:=real`, so it builds and runs with a
+core+sim import. `fer_moveit_config` declares `franka_msgs` as `<depend>`; CMake builds its robot-mode
+monitor when `find_package(franka_msgs QUIET)` finds it, and a stub that refuses
+`hardware:=real` otherwise. The Dockerfile runs
 `rosdep install --from-paths src --ignore-src -r -y`; `-r` continues past the absent
 profile's keys with a warning.
 
@@ -345,9 +348,8 @@ ROS package changes.
    - `README.md` → `docs/legacy/README_sim.md`.
 
    `env/cyclone_dds.xml` and `LICENSE` are identical in both repos and kept once.
-5. **Workspace docs** → `docs/`: this plan, `FER_ROS2_Review_2026-08-24.md`,
-   `FER_ROS2_Handoff.md`, `robotics_stack.md`. The previous `README.md` →
-   `docs/legacy/README_real.md`.
+5. **Workspace docs** → `docs/`: this plan. The previous `README.md` →
+   `docs/legacy/README_sim.md`.
 6. **`README.md`** rewritten around the profile workflow.
 7. **Rename GitHub repo** `fer_ros2` → `fer_ros2_driver`; update the profile URL
    and path and the local remote.
@@ -588,9 +590,10 @@ fer_behavior_trees        order, choices, retries, reactions to world changes
   │  fer_interfaces
   ├─► motion backend      /motion/*        plans and executes arm motion; one package per planner
   ├─► fer_gripper_server  /gripper/*       gripper commands, grasp evidence → object status
-  ├─► fer_world_model     /world_model/*   objects: identity, pose, shape, status
+  ├─► fer_world_model     /world_model/*   objects: identity, pose, bounding box, status
   └─► fer_grasp_planner   /grasp/*         grasp candidates for an object
-ros2_control              controllers, loaded inactive, activated by the server that needs them
+ros2_control              controllers, loaded inactive, activated at launch or by the operator;
+                          servers never switch them
 ```
 
 - The tree never sees a trajectory, a planner name or a controller name.
@@ -623,11 +626,13 @@ Rules:
 - Poses are `PoseStamped` in any TF frame. A server converts a pose to `base` once,
   when it accepts the goal; a pose in `fer_hand_tcp` is relative to the hand at that
   moment.
-- An object pose is the center of its shape (`shape_msgs/SolidPrimitive` convention).
+- An object pose is the center of its bounding box; `shape` is always a `SolidPrimitive`
+  `BOX`, oriented with the pose.
 - Every result starts with `Outcome`. Trees branch on `outcome.code`, never on
   `message`.
 - A new goal on a server replaces the running one; the old goal ends `CANCELLED`.
-- Only detection and `fer_gripper_server` write to the world model. Trees read.
+- Only detection and `fer_gripper_server` write to the world model; the world model itself
+  removes objects missing for longer than its removal timeout. Trees read.
 - The blackboard holds object ids, never copies of objects.
 
 **Enforcement**, in this order: message types, server validation, contract tests.
@@ -641,8 +646,8 @@ Rules:
 | `speed_scaling` in (0, 1] | motion backend | `INVALID_GOAL` |
 | gripper width in [0, 0.08] m | gripper server | `INVALID_GOAL` |
 | pose frame unknown to TF | motion backend | `INVALID_GOAL` |
-| unknown object id (`may_touch`, `object_id`) | motion backend, gripper server, world model | `NOT_FOUND` |
-| `Grasp` on a non-FREE object, `Release` on a non-GRASPED object, `RefineObject` on a GRASPED object | gripper server, world model | `INVALID_STATE` |
+| unknown object id (`may_touch`, `object_id`) | motion backend, gripper server, world model, grasp planner | `NOT_FOUND` |
+| `Grasp` on a non-FREE object, `Release` on a non-GRASPED object, `RefineObject` on a GRASPED or fixed object, `GetGraspCandidates` on a non-FREE or fixed object | gripper server, world model, grasp planner | `INVALID_STATE` |
 
 - Each server package has a contract test that sends valid and invalid goals and checks
   the outcomes. Every implementation of an interface — MoveIt or MPC backend, real or
@@ -655,110 +660,276 @@ Rules:
   process. Integration: `launch_testing` on `hardware:=mock` (Phase 6) or MuJoCo.
 - Tests never share the robot's DDS domain: C++ uses `ament_add_ros_isolated_gtest`
   (`ament_cmake_ros`); Python uses a `conftest.py` that sets a unique `ROS_DOMAIN_ID`
-  and `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` before `rclpy.init`.
+  and `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` before `rclpy.init`. The same
+  `conftest.py` starts worker processes with `forkserver`: `ament_flake8` forks, and
+  forking a test process that runs ROS threads can hang.
 - A sub-phase is done when `colcon test` passes for its packages. Lint per Phase 6.
 
-Old and new stack run side by side until 8.6.
+Old and new stack run side by side until 8.6, except pick and place in simulation: it
+ended in 8.1 with the removal of `mock_camera`, which seeded MoveIt's planning scene.
 
 #### 8.0 Groundwork
 
-- `fer_interfaces` joins `fer_core.repos` (`jazzy_devel`).
-- `fer_interfaces/README.md`: the interface table above.
-- `docker/Dockerfile`: `ros-jazzy-vision-msgs`.
-- Test isolation: the first `conftest.py` is written in `fer_planning_world_model`
-  (8.1); later Python packages copy it. C++ packages use
-  `ament_add_ros_isolated_gtest`.
+- `fer_interfaces` joins `fer_core.repos` (`jazzy_devel`). [Done]
+- `fer_interfaces/README.md`: the interface table above.   [Done]
+- `docker/Dockerfile`: `ros-jazzy-vision-msgs`.            [Done]
+- Test isolation: the first `conftest.py` is written in `fer_world_model` (8.1); later
+  Python packages copy it. C++ packages use `ament_add_ros_isolated_gtest`. [Done]
 
 **Verification:** fresh import and image build; `fer_interfaces` builds in the
-container.
+container. [Image newly built, simulation works, BT is executed]
 
-#### 8.1 World model without MoveIt — `fer_planning_world_model` (Python)
+#### 8.1 World model without MoveIt — `fer_world_model` (Python)
 
-- `core/`: the object schema gains `class_id`, `score`, `source`, `fixed` and status
-  LOST. New `association.py`: a detection matches a FREE object of the same class within
-  a gating distance, otherwise gets a new id `<class>_<n>`; the world model owns ids.
-  GRASPED objects are never changed by detections. An object not seen is never removed
-  or changed; it is reported in `not_seen`.
-- `planning_scene_world_model_server.py` rewritten against `fer_interfaces`:
-  `DetectObjects`, `RefineObject`, `QueryObjects`, `SetObjectStatus`,
-  `/world_model/objects` with `revision`. Subscribes `/perception/detections`
-  (`vision_msgs/Detection3DArray`, stamped at capture, camera frame) and transforms with
-  TF at the detection stamp into `base`. Fixed objects (table) from
-  `config/fixtures.yaml`. No `moveit_msgs`.
-- Snapshot: the first detection message stamped after the request, taken with the arm
-  at rest. The real `joint_state_publisher` runs at 30 Hz
+Layout per Testing: `core/` (no ROS imports), `adapters/ros_conversions.py`, a thin node.
+
+- **Data model.** `WorldObject`: `object_id`, `class_id`, `size` (bounding box x/y/z,
+  centered on and oriented with the pose), pose and frame, status FREE/GRASPED/LOST,
+  `held_by`, `fixed`, `score`, `source`, `last_observed`. FREE and LOST poses are stored
+  in `base`; a GRASPED pose is relative to `held_by`. Objects are boxes: `Detection3D`
+  carries only a bounding box, and nothing downstream needs an exact shape — collision,
+  attachment, the point-cloud crop of a grasp network and the top-down grasps of 8.4 all
+  use the box.
+- **Association** (`core/association.py`). Same class, center distance within
+  `association_gate`, nearest pairs first, each detection and object used once. An
+  unmatched detection first takes over a LOST object of the same class (it becomes FREE
+  and keeps its id), otherwise gets a new id `<class>_<n>`; the world model owns ids and
+  never reuses them. Detections below `min_score` are ignored; detections at a GRASPED
+  object's position — the held object seen in the hand — are dropped. GRASPED and fixed
+  objects are never changed by detection.
+- **Not seen and removal.** An object that is not seen is not changed; it is listed in
+  `not_seen`. A 1 Hz sweep removes FREE and LOST objects missing for longer than
+  `removal_timeout`. The clock starts at the first snapshot that missed the object (a
+  `RefineObject` miss counts; for LOST, the moment it became LOST), so nothing is removed
+  while no detection runs. GRASPED and fixed objects are never removed.
+- **Server** (`world_model_server.py`). Serves `DetectObjects`, `RefineObject`,
+  `QueryObjects`, `SetObjectStatus` and the latched `/world_model/objects` with
+  `revision` (+1 on every change). Subscribes `/perception/detections`
+  (`vision_msgs/Detection3DArray`, stamped at capture, camera frame, best effort) and
+  transforms with TF at the detection stamp into `base`. No usable detection within
+  `detection_timeout` → `TIMEOUT`. One detection goal at a time: a new `DetectObjects` or
+  `RefineObject` goal ends the running one with `CANCELLED`. `SetObjectStatus` to FREE
+  records `source: release_estimate`. The server takes a `Node` and a `WorldModel`;
+  `build_world_model()` creates the model from the node parameters and loads the
+  fixtures. One lock serializes model access; waits and TF lookups happen outside it.
+- **Snapshot:** the first detection message stamped after the request, taken with the
+  arm at rest. The real `joint_state_publisher` runs at 30 Hz
   (`fer_real_ros2_control.launch.py`), so TF at the stamp is inaccurate while the arm
   moves. `RefineObject` is taken from a viewing pose within the D405 range (7–50 cm).
-- New node `mock_perception`: publishes `Detection3DArray` from YAML (class, center
-  pose, size; no ids).
-- `mock_camera_node.py` and `planning_scene_adapter.py` stay for the old stack until
-  8.7.
+- **Configuration.** `config/world_model.yaml` holds the parameters. `config/fixtures.yaml`
+  holds one fixed object, the table the FER stands on, top at `base` z = 0 (the MuJoCo
+  floor and the real mounting table). `world_model.launch.py` passes `fixtures_file`
+  and, with `perception:=mock`, `mock_objects_file`.
+- **Mock perception.** `mock_perception` publishes `Detection3DArray` from
+  `config/mock_objects.yaml` (class, center pose, size, score; no ids) at 5 Hz. How the
+  mock follows objects in the MuJoCo scene is separate work.
+- **Old stack removed.** `mock_camera_node.py`, `planning_scene_adapter.py`, the
+  planning-scene server and `core/planning_scene_*.py`; `package.xml` no longer depends on
+  `moveit_msgs`.
+- **Contract** (`fer_interfaces`, comments and README only): `DetectObjects` and
+  `RefineObject` list `TIMEOUT`; a `RefineObject` `NOT_FOUND` also means not seen;
+  `updated` includes LOST objects found again; `WorldObject.shape` is always a `BOX`;
+  README rule on not-seen, removal and LOST adoption.
 
-**Verification:** pytest for association, status rules and not-seen handling; CLI
-detect → query → set status → refine; `package.xml` contains no `moveit_*`.
+**Verification:** pytest for association, status rules, not-seen handling, id allocation,
+LOST adoption, held-object suppression and removal (including no removal without a
+miss); contract test — the node with fake detections and a static camera transform in
+one process — for outcomes, TF, goal replacement, client cancel and the latched topic;
+CLI with `perception:=mock`: detect → query → set status → refine → removal. `colcon
+test` green, including `ament_flake8` and `ament_pep257`.
 
 #### 8.2 Gripper — `fer_gripper_server` (new repo, Python)
 
-- Serves `MoveGripper`, `Grasp`, `Release`. One adapter per hardware, selected by
-  parameter:
-  - real: `/fer_gripper/move`, `/fer_gripper/grasp` (width, epsilon = `tolerance`,
-    speed from config, force); width from `/fer_gripper/joint_states`;
-  - mujoco: `control_msgs/GripperCommand` on `gripper_effort_controller` (position =
-    width / 2, `max_effort` = force); the node checks width and tolerance itself and
-    activates `gripper_effort_controller` at startup.
-- `Grasp`: object must be FREE. Success when the measured width is within `tolerance`
-  of `width` and above `min_hold_width` → `SetObjectStatus` GRASPED, `held_by`
-  `fer_hand_tcp`, pose relative to the hand. Failure → reopen to the width before
-  closing, `GRASP_FAILED`, world model unchanged.
-- `Release`: object must be GRASPED. Open, confirm the width, then `SetObjectStatus`
+Layout per Testing: `core/grasp.py` (checks, errors, the `Gripper` interface),
+`adapters/`, a thin node; node, adapters and server are built in `main` and passed in.
+
+- **Adapters**, one per hardware, selected by `hardware`:
+  - real: `franka_msgs` `Move` / `Grasp` on `/fer_gripper` (epsilon inner = outer =
+    `tolerance`, speed from config, force); width and `is_grasped` from
+    `/fer_gripper/gripper_state`. `franka_msgs` is imported only for `hardware:=real`
+    (§2.5).
+  - mujoco: `control_msgs/GripperCommand` on `gripper_effort_controller`. A grasp closes
+    fully with `max_effort` = force and stalls on the object; a move commands width / 2.
+    Width = 2 × `fer_finger_joint1` from `/joint_states`. The controller must be active
+    before the server starts; the server does not switch controllers.
+- **`Grasp`:** object must be FREE. Success when the measured width is within
+  `tolerance` of `width` and above `min_hold_width` (real: and `is_grasped`) →
+  `SetObjectStatus` GRASPED, `held_by` `fer_hand_tcp`, pose relative to the hand.
+  Failure → reopen to the width before closing, `GRASP_FAILED`, world model unchanged.
+- **`Release`:** object must be GRASPED. Open, confirm the width, then `SetObjectStatus`
   FREE at the hand pose combined with the stored offset, `source` `release_estimate`.
+- **Watch:** while an object is held, it is set LOST as soon as the grip is gone — real:
+  `is_grasped` false; sim: width more than `tolerance` away from the grasp width, in
+  either direction (slipping, removal, a `MoveGripper` opening the hand). Paused during
+  `Grasp` and `Release`. The next detection of its class takes it over under the same id.
+- **One goal at a time** across the three actions: a newer goal ends the running one with
+  `CANCELLED`; the old hardware command is cancelled and awaited before the new one
+  starts, so two goals never command the hand at once.
+- **Outcomes:** invalid width, force or tolerance → `INVALID_GOAL`; `Grasp` while already
+  holding → `INVALID_STATE`; hardware error → `GRIPPER_FAILED` (`RELEASE_FAILED` in
+  `Release`); world model not answering → `TIMEOUT`.
+- **Driver (`fer_ros2`, additive):** `franka_msgs/msg/GripperState` (width, max width,
+  `is_grasped`, temperature); `franka_gripper` publishes it on `~/gripper_state` from the
+  same `readOnce()` result as `~/joint_states`. Recorded in the `fer_ros2` CHANGELOG.
+- **Bringup:** `gripper_effort_controller` gets PID gains and `allow_stalling: true`
+  (`fer_controllers_gripper.yaml`); MuJoCo runs with `hand_control_type:=effort`.
+- **Known limits:** the held object is remembered in memory only; poses use the latest
+  TF (arm at rest); if the world model rejects GRASPED, or the goal is cancelled between
+  closing and reporting, the hand holds an object the world model lists as FREE —
+  watched at runtime.
 
-**Verification:** contract test; `Grasp` on nothing → `GRASP_FAILED`, gripper reopened,
-world model unchanged; `Grasp` on an object → GRASPED; `Release` → FREE. Sim and real.
+**Verification:**
+- Done: `colcon test` green — core, contract test (sim adapter against a simulated hand:
+  move, grasp on nothing, grasp and release, validation, both LOST cases, replacement,
+  cancel), franka adapter tests against fake `franka_gripper` actions, lint. MuJoCo:
+  `MoveGripper` 0.02 / 0.08 reached; invalid width → `INVALID_GOAL`; `Grasp` on nothing
+  → `GRASP_FAILED`, gripper back at 0.08, world model unchanged.
+- Open: `Grasp` on a physical object in MuJoCo (needs scene objects); real hand —
+  grasp and release, `is_grasped` while holding, object taken out → LOST.
 
-#### 8.3 Motion — `fer_motion_moveit` (new repo, C++)
+#### 8.3 Motion — `fer_moveit_motion_server` in `fer_moveit_config` (C++)
 
-- Serves `MoveToPose`, `MoveToJoints`, `CheckReachable`. MoveIt runs in-process through
-  MoveItCpp; no `move_group`.
-- Per request: `QueryObjects` snapshot → collision scene (FREE and fixed objects as
-  primitives, GRASPED objects attached to `held_by`, `may_touch` allows hand-link
-  contact with the listed objects for this request only) → plan with OMPL for
-  `PATH_FREE` and Pilz LIN for `PATH_STRAIGHT` → time parameterization with
-  `speed_scaling` → start state checked against `/joint_states` →
-  `FollowJointTrajectory` to the configured arm controller.
-- `CheckReachable` plans the chained targets without executing and returns the
-  configuration at each target.
-- Activates `arm_controller` (parameter: `effort_trajectory_controller` |
-  `position_trajectory_controller`) through `/controller_manager/switch_controller` at
-  startup.
-- Cancel → cancel the controller goal; `CANCELLED` once the arm is at rest.
-- `ROBOT_ERROR` from the robot mode reported by `franka_robot_state_broadcaster`
-  (real).
-- The planning pipeline keeps a start-state fix: the closed real gripper reports
-  −2.6e‑6, below its joint limit.
-- Publishes the planning scene for RViz. Robot description, SRDF, kinematics and
-  pipeline parameters from `fer_moveit_config`.
-- New `fer_moveit_config/config/moveit_cpp.yaml`: planning scene monitor options and
-  the planning pipelines (OMPL, Pilz) for MoveItCpp. `move_group` has no equivalent
-  file.
-- To check: how the JTC stops a cancelled goal at speed (hold or deceleration).
+A client of `move_group`: MoveIt keeps the planning scene, plans and executes; the server
+adds validation, the world model, `may_touch`, goal replacement and outcome codes. It lives
+in `fer_moveit_config` because server and MoveIt configuration change together (pipeline
+names, group, tip link, hand links, controller list); the package is renamed after Phase 8.
+Node and executable `fer_moveit_motion_server`; another backend (e.g. MPC) is its own
+package. Layout per Testing: `core/checks.cpp` (no ROS), `adapters/`
+(`world_model_client`, `move_group_client`, `robot_mode_monitor`), `motion_server.cpp`,
+`main.cpp` builds the parts and passes them in.
 
-**Verification:** contract test; unit tests with the robot model and a fake
-`FollowJointTrajectory` server; sim: joints → home, pose with free path, pose with
-straight path, `CheckReachable` returns 7 values per target, cancel mid-motion; real at
-low speed; `launch-mock` once Phase 6 exists.
+- **Serves** `/motion/move_to_pose`, `/motion/move_to_joints`, `/motion/check_reachable`.
+  **Uses** `/world_model/query_objects`, `/apply_planning_scene`, `/get_planning_scene`,
+  `/move_action` (plan only), `/execute_trajectory`, `/trajectory_execution_event`,
+  `/joint_states`, TF, and on the real robot `/franka_robot_state_broadcaster/robot_state`.
+- **Per request:**
+  1. `speed_scaling` in (0, 1] and pose frame known to TF (converted to `base` once, with
+     the latest transform) → else `INVALID_GOAL`. Real: robot mode `REFLEX` or
+     `USER_STOPPED` → `ROBOT_ERROR`.
+  2. `QueryObjects` (FREE and GRASPED, fixed included); no answer → `TIMEOUT`; unknown
+     `may_touch` id → `NOT_FOUND`.
+  3. One `ApplyPlanningScene` (lasting, shown in RViz): FREE and fixed objects as boxes,
+     GRASPED objects attached to `held_by` with the `fer_hand` links as touch links,
+     objects gone from the world model removed.
+  4. `may_touch`: the current allowed-collision matrix (`GetPlanningScene`) plus
+     (object, hand link) pairs, sent in the plan request's `planning_scene_diff`.
+     `move_group` plans a plan-only request on a copy of its scene, so the allowance
+     holds for that plan only; a diff replaces the whole matrix, hence the full copy.
+  5. Plan-only `MoveGroup` on `fer_arm`, velocity and acceleration scaling =
+     `speed_scaling`: `PATH_FREE` and joint targets with `ompl` (TOTG timing),
+     `PATH_STRAIGHT` with Pilz `LIN`. A planning failure → `NO_PATH`, with the reason in
+     `message`: `move_group`'s plan-only path replaces every planner error code with
+     `FAILURE`, so `UNREACHABLE` cannot be told apart. The server still maps
+     `NO_IK_SOLUTION`, `GOAL_IN_COLLISION`, `INVALID_GOAL_CONSTRAINTS`,
+     `GOAL_CONSTRAINTS_VIOLATED`, `GOAL_STATE_INVALID` → `UNREACHABLE` should a code
+     arrive.
+  6. `ExecuteTrajectory` without a controller name, so `move_group` uses the arm
+     controller selected by `arm_control_type`; it checks the start state (0.01 rad),
+     sends `FollowJointTrajectory` and watches the time (duration × 1.1 + 0.5 s).
+     Failure → `EXECUTION_FAILED` ("is the arm controller active?"), `ROBOT_ERROR` if
+     the robot is in reflex or user stop.
+- **Cancel and replacement:** one motion at a time; a newer goal stops the running one.
+  Cancelling `ExecuteTrajectory` does not stop the arm in Jazzy, so the server publishes
+  `"stop"` on `/trajectory_execution_event`; the controller decelerates
+  (`decelerate_on_cancel`) and the goal ends `CANCELLED` once every joint is below
+  `rest_velocity`. The next goal plans from where the arm stopped. Stopping before the
+  next goal is intended: the contract ends motions at their goal, MoveIt plans from rest,
+  and 8.1/8.2 rely on a resting arm.
+- `CheckReachable` plans each target from the previous target's end configuration and
+  never executes; it returns 7 values per target, or `failed_index`.
+- **Controllers:** never switched and not checked; `move_group`'s arm controller must be
+  active.
+- **Start state:** `CheckStartStateBounds` checks only the planning group's joints, so a
+  closed finger below its limit does not block arm planning. The former
+  `start_state_max_bounds_error` is not read in Jazzy and is dropped.
+- **`ROBOT_ERROR`:** real only, from `FrankaState.robot_mode`. No conditional
+  compilation: CMake builds `robot_mode_monitor.cpp` when `franka_msgs` is found, else a
+  stub whose constructor refuses `hardware:=real` (§2.5).
+- **`fer_moveit_config`:** `fer_moveit_launch.py` gets `planning_pipelines`
+  (`ompl` default, `pilz_industrial_motion_planner`), Cartesian limits under
+  `robot_description_planning`, execution duration monitoring on (× 1.1 + 0.5 s);
+  `ompl_planning.yaml` group keys fixed (`fer_arm`, `fer_manipulator`, `fer_hand`;
+  `RRTConnect` default); `cartesian_limits.yaml` sized to the joint limits (0.6 m/s,
+  ±0.9 m/s²). New `fer_moveit_motion_server.launch.py` and
+  `config/fer_moveit_motion_server.yaml` (tuning values only: planning time and
+  attempts, goal tolerances, rest detection, timeouts; names, frames and pipelines are
+  constants in the code).
+- **Bringup:** the three trajectory controllers decelerate on cancel at half the FER
+  datasheet joint accelerations (`fer_controllers.yaml`). No goal tolerances yet; set
+  from measurements on the real robot.
+- **Contract** (`fer_interfaces`, comments and README only): `MoveToPose`,
+  `MoveToJoints` and `CheckReachable` list `TIMEOUT`; README: `CANCELLED` once at rest,
+  failed execution → `EXECUTION_FAILED`.
+- **Known limits:** a cancel during planning takes effect when `move_group` has finished
+  planning; `"stop"` stops every execution in `move_group`; objects this server wrote stay
+  in `move_group`'s scene after a server restart until an object with the same id is
+  written again; poses use the latest TF (arm at rest); the slowing-down stretch after a
+  cancel is not collision-checked; without goal tolerances an uncancelled motion that
+  does not reach its target reports `OK`; every planning failure is `NO_PATH`, never
+  `UNREACHABLE` (see step 5); straight lines depend on the pose: Pilz checks them against
+  `joint_limits.yaml` (a quarter of the datasheet), and `cartesian_limits.yaml` is sized
+  for poses near `ready`, so close to a singularity even a slow straight line can end
+  `NO_PATH`.
 
+**Verification:** `test_checks` (core); `test_contract` — the server in one process with
+fake `move_group`, world model and arm: validation, `NOT_FOUND`, `TIMEOUT`, request
+contents, scene sync, `may_touch`, error mapping, chained `CheckReachable`, replacement
+and client cancel after rest, controller failure, `ROBOT_ERROR`;
+`move_group_test.launch.py` — against the real `move_group`: straight path within 1 mm
+of the line, `may_touch`, held object vs table, speed scaling, closed finger, stop. Sim:
+joints → `ready`, free and straight poses, chained `CheckReachable`, cancel and
+replacement mid-motion, RViz shows the scene. Real at `speed_scaling` 0.1: cancel without
+reflex, user stop → `ROBOT_ERROR`, velocities in `/joint_states`, final joint error
+measured for goal tolerances.
+
+[Done]
 #### 8.4 Grasp candidates — `fer_grasp_planner` (new repo, Python)
 
-- Serves `GetGraspCandidates`. Top-down candidates from the object's box: width from
-  the box, pre-grasp above the grasp along the approach, lift above the grasp, force
-  per class from `config/object_catalog.yaml`.
+Layout per Testing: `core/top_down.py` (geometry), `core/catalog.py`,
+`adapters/` (world-model client, message conversions), a thin node; client and server
+are built in `main` and passed in.
+
+- **Service:** `GetGraspCandidates` on `/grasp/candidates`. Reads the object with
+  `QueryObjects` (fixed objects included) and computes top-down candidates from its box.
+  Whether the arm can execute a candidate is not checked here; `FindReachableGrasp`
+  (8.5) does that with `CheckReachable`.
+- **Geometry**, in the object's frame (`base` for FREE objects), poses of
+  `fer_hand_tcp`:
+  - up axis = the box axis closest to vertical; the other two are the sides the
+    fingers close across;
+  - per side no wider than `max_object_width` (0.07 m: the 0.08 m opening minus 1 cm):
+    two candidates with the hand turned 180° apart, since joint 7 may reach only one
+    → 0, 2 or 4 candidates;
+  - hand z down, hand y (finger direction) across the side;
+  - grasp height: the box center, raised to `max_grasp_depth` (0.04 m) below the top
+    so the palm stays off tall objects, and at least `min_tip_clearance` (0.012 m)
+    above the bottom — the fingertips reach 9.5 mm below the TCP;
+  - pre-grasp and lift 0.10 m straight above the grasp, same orientation;
+  - `width` = the side, `force` from the catalog; narrower side first;
+    `max_candidates` > 0 cuts the list.
+- **Outcomes:** unknown id → `NOT_FOUND`; not FREE or fixed → `INVALID_STATE`; world
+  model not answering → `TIMEOUT`; no side fits → `OK` with an empty list. `NO_DATA` is
+  left to the grasp network.
+- **Catalog** (`config/object_catalog.yaml`): force per class plus `default` for
+  classes not listed. One catalog for real and MuJoCo, so forces stay within MuJoCo's
+  20 N. A missing `default` or a force ≤ 0 stops the node at startup.
+- **Debug view:** the grasp poses of the latest answer on `/grasp/debug/candidates`
+  (`PoseArray`, latched), not part of the contract. `fer_ros2_bringup`'s
+  `fer_mujoco.rviz` and `fer_real.rviz` show it as `GraspCandidates` (shape Axes), one
+  frame per candidate.
+- **Contract** (`fer_interfaces`, comments and README only): `GetGraspCandidates` lists
+  `TIMEOUT` and fixed objects under `INVALID_STATE`; an empty list means no side fits.
 - A grasp network later replaces the computation behind the same service. It runs on
   the perception host (§9), crops the newest point cloud to the object's box, and
   converts its gripper frame to `fer_hand_tcp` (0.1034 m offset).
 
-**Verification:** pytest for the geometry; candidates for a mock object shown in RViz;
-`CheckReachable` passes for at least one.
+**Verification:** pytest for the geometry (upright, turned, too wide, tall, flat and
+lying boxes; order) and the catalog; contract test — the node with a fake world model in
+one process — for all outcomes, `max_candidates` and the debug topic; `colcon test`
+green, including lint. CLI with `perception:=mock`: `DetectObjects` → candidates for a
+box (4, width 0.05, force 15), the table → `INVALID_STATE`. RViz: one frame per
+candidate on the mock object, blue axis down.
+[Done]
 
 #### 8.5 Behavior trees — `fer_behavior_trees`
 
@@ -796,7 +967,10 @@ grasp recovers.
 | `fer_manipulation_bt.launch.py` | BT server |
 
 - `hardware` reaches every node that differs by hardware.
-- `move_group` and `fer_skills` are not started.
+- `hardware:=mujoco` runs with `hand_control_type:=effort` and activates
+  `gripper_effort_controller` before the gripper server starts.
+- `fer_skills` is not started. `fer_manipulation.launch.py` builds on the `fer_moveit`
+  level: `move_group` serves the motion backend.
 
 **Verification:** the same tree on `hardware:=mujoco` and `hardware:=real`.
 
@@ -804,10 +978,10 @@ grasp recovers.
 
 - `fer_skills` leaves `fer_core.repos`; the repo is archived.
 - `fer_behavior_trees`: old client nodes and trees removed.
-- `fer_planning_world_model`: `mock_camera_node.py`, `planning_scene_adapter.py`
-  removed.
 - `fer_ros2_bringup`: `fer_moveit_skills.launch.py`, `fer_moveit_skills_bt.launch.py`
-  removed; `fer_moveit.launch.py` stays for manual planning in RViz.
+  removed; `fer_moveit.launch.py` stays as the MoveIt level of the new stack (`move_group`
+  for the motion backend, manual planning in RViz).
+- `fer_moveit_config` renamed together with its C++ namespace; name decided then.
 - `robotics_stack.md` updated.
 
 **Deferred** — the interfaces already allow them: grasp network, D405 perception node,
@@ -834,7 +1008,7 @@ streaming motion contract (§10), MPC backend, compliant control.
 | Risk | Mitigation |
 |---|---|
 | Phase 1 changes kinematics unnoticed | Blocking diff against upstream, permanent CI job |
-| Real robot regresses | Driver source untouched; real URDF compared against the former `fer_bringup` output; hardware re-validation after Phases 1 and 2 |
+| Real robot regresses | Driver changes additive only (8.2: `GripperState` publisher), each recorded in the `fer_ros2` CHANGELOG; real URDF compared against the former `fer_bringup` output; hardware re-validation after Phases 1 and 2 |
 | Phase 1 lands in one repo but not the others | Changes to `fer_ros2_bringup`, `fer_moveit_config`, `fer_ros2_driver` and the profiles merged together; `unique-package-names` CI |
 | Consumers pass different arguments to the upstream xacro | Arguments aligned in Phase 1; `description-invariant` CI compares against upstream |
 | Package-level dependency cycle | MoveIt config and motion backend depend on upstream `franka_description`, never on the bringup; `dependency-direction` CI |
@@ -843,7 +1017,7 @@ streaming motion contract (§10), MPC backend, compliant control.
 | Repo renames break clones and manifests | Profiles updated in the same step; GitHub redirects as a fallback only |
 | rosdep warnings mistaken for errors | Documented in the platform README; both profile builds in CI |
 | A test goal reaches the real robot (host network, one DDS domain) | Every test runs in an isolated DDS domain (Phase 8, Testing) |
-| Old and new stack diverge during Phase 8 | Both run side by side until 8.6; the old stack is removed only after the same tree passes on sim and real |
+| Old and new stack diverge during Phase 8 | Both run side by side until 8.6 (sim pick and place of the old stack ended in 8.1); the old stack is removed only after the same tree passes on sim and real |
 
 ---
 
@@ -963,6 +1137,10 @@ The document is a public contract per §2.6.
   require further patches; libfranka patches are kept as separate commits.
 - **SSM is not a certified safety function.** Protective stops go through the
   Franka safety system and E-stop.
+- **Out of view counts as missed.** `not_seen` cannot tell "gone" from "outside the
+  camera's view", so an object outside the view pose's field of view is removed after the
+  removal timeout. With the real camera, only objects inside its view should count as
+  missed.
 
 ---
 

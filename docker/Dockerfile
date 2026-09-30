@@ -124,6 +124,7 @@ RUN apt-get update && \
     ros-${ROS_DISTRO}-moveit-task-constructor-capabilities \
     ros-${ROS_DISTRO}-moveit-task-constructor-visualization \
     ros-${ROS_DISTRO}-behaviortree-cpp \
+    ros-${ROS_DISTRO}-vision-msgs \
     && rm -rf /var/lib/apt/lists/*
 
 USER ${USER}

@@ -25,9 +25,9 @@ repositories:
     type: git
     url: https://github.com/GKnerd/fer_behavior_trees.git
     version: main
-  ros2_ws/src/fer_planning_world_model:
+  ros2_ws/src/fer_world_model:
     type: git
-    url: https://github.com/GKnerd/fer_planning_world_model.git
+    url: https://github.com/GKnerd/fer_world_model.git
     version: main
   ros2_ws/src/speed_and_separation_monitoring:
     type: git
@@ -36,4 +36,12 @@ repositories:
   ros2_ws/src/fer_interfaces:
     type: git
     url: https://github.com/GKnerd/fer_interfaces.git
+    version: jazzy_devel
+  ros2_ws/src/fer_gripper_server:
+    type: git
+    url: https://github.com/GKnerd/fer_gripper_server.git
+    version: jazzy_devel
+  ros2_ws/src/fer_grasp_planner:
+    type: git
+    url: https://github.com/GKnerd/fer_grasp_planner.git
     version: jazzy_devel

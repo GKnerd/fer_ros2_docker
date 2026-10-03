@@ -91,6 +91,8 @@ docker run \
     --ulimit rtprio=99 \
     --ulimit memlock=-1 \
     -e DISPLAY=$DISPLAY \
+    -e ROS_LOG_DIR=/home/${CONTAINER_USER}/logs \
+    -v $PACKAGE_ROOT/log:/home/${CONTAINER_USER}/logs \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
     "${XAUTH_MOUNT[@]}" \
     -v $PACKAGE_ROOT/ros2_ws:/home/${CONTAINER_USER}/ros2_ws \

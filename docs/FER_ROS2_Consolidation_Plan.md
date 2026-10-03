@@ -619,6 +619,7 @@ contract per §2.6. Depends only on `action_msgs`, `builtin_interfaces`,
 | `QueryObjects` | service | `/world_model/query_objects` | `fer_world_model` | BT, motion backend, gripper server, grasp planner |
 | `SetObjectStatus` | service | `/world_model/set_object_status` | `fer_world_model` | `fer_gripper_server` |
 | `GetGraspCandidates` | service | `/grasp/candidates` | `fer_grasp_planner` | BT |
+| `GetPlaceCandidates` | service | `/place/candidates` | `fer_grasp_planner` | BT |
 | `WorldObjectArray` | topic, latched | `/world_model/objects` | `fer_world_model` | RViz, monitoring |
 
 Rules:
@@ -882,6 +883,15 @@ replacement mid-motion, RViz shows the scene. Real at `speed_scaling` 0.1: cance
 reflex, user stop → `ROBOT_ERROR`, velocities in `/joint_states`, final joint error
 measured for goal tolerances.
 
+Lifting a held object that rests on the table (was open; confirmed in the first MuJoCo
+PickPlace run, 2026-10-02): the attached box touches the table at the start of the lift
+and `CheckStartStateCollision` rejects it. Resolved inside `MoveGroupClient`, no
+interface change: on a `PATH_STRAIGHT` motion while an object is held, the client asks
+`/check_state_validity` for the start-state contacts and allows (held object, world
+object) pairs for that plan request only. Free paths and joint targets get none. Tested
+in `move_group_test` (`HeldObjectLiftsStraightOffTheSurfaceItRestsOn`). `CheckReachable`
+checks the lift without the object attached.
+
 [Done]
 #### 8.4 Grasp candidates — `fer_grasp_planner` (new repo, Python)
 
@@ -931,32 +941,136 @@ box (4, width 0.05, force 15), the table → `INVALID_STATE`. RViz: one frame pe
 candidate on the mock object, blue axis down.
 [Done]
 
+**Place candidates.** `fer_grasp_planner` also serves `GetPlaceCandidates` on
+`/place/candidates`: for a GRASPED object and a target (bottom center of its box and its
+orientation there), the hand poses to put it down — pre-place, place, retreat straight
+above. The contract is in `fer_interfaces` since 8.5. Layout: `core/place.py`, rotation
+helpers shared with `top_down.py` in `core/geometry.py`, `place_server.py`; `main` builds
+both servers with one world-model client and one TF buffer.
+
+- **Target:** any TF frame, converted to `base` once with the latest transform
+  (`tf_timeout` 0.2 s). The target orientation is the object's full orientation at the
+  place: an object held upright with a yaw-only target keeps the hand pointing down; an
+  object held with another box axis vertical is stood up and the hand tilts.
+- **Geometry:** box bottom `place_clearance` (0.005 m) above the target, so the attached
+  box does not touch the surface while MoveIt plans; the hand pose follows from the
+  object's pose relative to `fer_hand_tcp` in the world model. Pre-place
+  `preplace_distance` and retreat `retreat_height` (0.10 m each) straight above, same
+  orientation. Two candidates: the target orientation, then the object turned 180° about
+  the vertical, since joint 7 may reach only one.
+- **Outcomes:** target frame unknown to TF or orientation not a rotation →
+  `INVALID_GOAL`; world model not answering → `TIMEOUT`; unknown id → `NOT_FOUND`; not
+  GRASPED, or held by a frame other than `fer_hand_tcp` → `INVALID_STATE`.
+
+**Verification:** pytest for the geometry (upright box held from above, target yaw, tall
+box held above its center, tilted target, pre-place and retreat); contract test — both
+servers with a fake world model and a static transform in one process — for all
+outcomes and a target in another frame; `colcon test` green. MuJoCo CLI: a GRASPED
+`box_1` → 2 candidates, `CheckReachable` on one → `OK`.
+[Done]
+
 #### 8.5 Behavior trees — `fer_behavior_trees`
 
-- One node per interface: `MoveToPose`, `MoveToJoints`, `MoveGripper`, `Grasp`,
-  `Release`, `DetectObjects`, `RefineObject`, `QueryObjects`, `GetGraspCandidates`;
-  each writes `outcome.code` to an output port. `FindReachableGrasp` calls
-  `CheckReachable` per candidate (pre-grasp free → grasp straight → lift straight) and
-  outputs the first passing candidate with its pre-grasp configuration.
-- `Pick` and `Place` SubTrees; `pick_place.xml` loops over `QueryObjects` results with
-  `LoopString`.
-- `Pick` sequence: `MoveToJoints` to the view pose → `RefineObject` →
-  `GetGraspCandidates` → `FindReachableGrasp` → `MoveGripper` open → `MoveToJoints` to
-  the pre-grasp configuration → `MoveToPose` straight to the grasp with `may_touch` →
-  `Grasp` (on failure: `MoveToPose` straight back to the pre-grasp, then fail) →
-  `MoveToPose` straight to the lift pose.
+New server `fer_bt_server` (C++, BehaviorTree.ROS2 `TreeExecutionServer`) next to the old
+`bt_server_node`; the old server, its `fer_skills` nodes and `trees/*.xml` stay until 8.7
+(both register a `MoveToPose`, and the old server loads every XML in `trees/` and throws
+on unknown nodes). New trees live in `trees/manipulation/`. `fer_skills` stays a
+dependency until 8.7. Layout: `src/core/payload.cpp` (no ROS), `src/nodes/` (one file per
+server), `src/server.cpp`, `main.cpp` builds the node and passes it in.
+
+- **MuJoCo scene:** `fer_ros2_bringup/scenes/pick_place_world.xml` puts the robot on a
+  table (top at `base` z = 0 as in `fixtures.yaml`, floor at −0.75 m) with free objects
+  at the poses and sizes of `fer_world_model/config/mock_objects.yaml`. Selected with
+  `scene:=`, which `fer_moveit.launch.py` passes to MuJoCo; `base_world.xml` stays empty.
+- **Nodes**, one per interface: `MoveToPose`, `MoveToJoints`, `MoveGripper`, `Grasp`,
+  `Release`, `DetectObjects`, `RefineObject`, `QueryObjects` (ids of the FREE, non-fixed
+  objects of a class), `GetGraspCandidates`, `GetPlaceCandidates`. Each writes
+  `outcome.code` to its `outcome` port, also when the server ends the goal aborted; `OK` →
+  SUCCESS, anything else → FAILURE. No answer → `TIMEOUT`, a goal the node cannot build →
+  `INVALID_GOAL`. Halting cancels the goal once.
+- **`FindReachableGrasp` / `FindReachablePlace`** (one implementation): per candidate, best
+  first, one `CheckReachable` — approach free, target and retreat straight with
+  `may_touch` [object]; the first `OK` wins and its approach configuration is an output.
+  No candidate reachable → FAILURE with the last outcome.
+- **`Pick`:** `MoveToJoints` to the view pose → `MoveGripper` open → `RefineObject` →
+  `GetGraspCandidates` → `FindReachableGrasp` → `MoveToJoints` to the pre-grasp
+  configuration → `MoveToPose` straight to the grasp with `may_touch` → `Grasp` (on
+  failure: `MoveToPose` straight back to the pre-grasp, then fail) → `MoveToPose` straight
+  to the lift pose.
+- **`Place`** (`object_id`, `x`, `y`): `GetPlaceCandidates` → `FindReachablePlace` →
+  `MoveToJoints` to the pre-place configuration → `MoveToPose` straight to the place pose →
+  `Release` → `MoveToPose` straight to the retreat pose with `may_touch` (the fingers are
+  still around the object).
+- **`PickPlace`:** `DetectObjects` and `QueryObjects` for `target_class`, then `LoopString`
+  over the ids: `Pick` retried up to `pick_attempts` times; picked → `Place` at the next
+  slot of a row (x from 0.35 m in 0.12 m steps, y 0.30 m, set by `Script` in the XML;
+  at 0.08 m an opening finger hit the box placed before);
+  not picked → next object. A failed `Place` ends the tree (the object may still be in the
+  hand). Then `MoveToJoints` home. SUCCESS only if every object was placed; no objects of
+  the class → SUCCESS.
+- The gripper opens before `FindReachableGrasp`: `CheckReachable` checks the fingers
+  where they are.
+- Trees never branch on `UNREACHABLE`: the MoveIt backend reports every planning
+  failure as `NO_PATH` (8.3). `FindReachable*` takes any outcome other than `OK` as
+  the next candidate.
 - The pre-grasp is reached with `MoveToJoints`, not `MoveToPose`: the arm has 7
   joints, so a pose alone can end in a different arm configuration than the one
   `CheckReachable` tested, from which the straight approach may fail.
-- Goal payload (JSON) → global blackboard (e.g. `target_class`). Keys of the previous
-  goal are cleared; a malformed payload is rejected.
-- The blackboard holds ids only. Place targets are fixed poses in the tree. Named poses
-  (`home`, `view`) come from `config/poses.yaml`.
-- Depends on `fer_interfaces` only.
+- **Payload:** the `ExecuteTree` goal's `payload`, a flat JSON object with string or
+  integer values, goes to the global blackboard; `PickPlace` reads `target_class` and
+  `pick_attempts`. Keys of the previous goal are removed first. Malformed JSON, other
+  value types or a key named like a named pose → goal rejected.
+- The blackboard holds ids only; hand poses come from the grasp planner. Named poses
+  (`home`, `view`, 7 joint values each) are parameters in `config/poses.yaml`, put on the
+  global blackboard at startup.
+- **Known limits:** one goal at a time — a goal sent while a tree runs waits for it, but
+  its payload is applied at once; a `Pick` that fails after the grasp (lift) retries with
+  the object in the hand.
 
-**Verification:** tree tests with fake nodes (`Grasp` fails → `Pick` backs out and
-fails); sim pick-and-place with mock perception and no object id in XML; one failed
-grasp recovers.
+**Verification:** `test_payload` (payload rules); `test_nodes` — each node against fake
+servers in one process: goal fields from ports, outcome port, status mapping, halt →
+cancel, `QueryObjects` request and ids, place target from x/y/yaw, `FindReachableGrasp`
+request contents, first reachable candidate, none reachable, no candidates; `test_trees` —
+the real XML with fake nodes: Pick and Place order, failed grasp backs out, retries then
+the next object, success on a retry, failed place ends the tree, place slots advance, no
+objects → SUCCESS. Done: `colcon test` green; sim pick-and-place with mock perception and
+no object id in XML — first full `PickPlace` SUCCESS in MuJoCo on 2026-10-02. Open: one
+failed grasp recovers (the back-out works; a later attempt succeeding is not yet seen).
+
+Open after the first MuJoCo runs (2026-10-02):
+
+- **Box grasp force in the catalog:** `box: {force: 5.0}` in
+  `fer_grasp_planner/config/object_catalog.yaml` is a MuJoCo workaround — at 15 N the
+  fingers pressed about 3 mm per side into the box (measured 0.0441 m on a 0.05 m box, outside
+  the 5 mm `Grasp` tolerance). The catalog is shared with the real robot. Proposed: stiffer
+  object contacts in `pick_place_world.xml` (`solref="0.004 1" solimp="0.95 0.99 0.001"`
+  on the object classes), then the box back to 15 N.
+- **Execution duration monitoring is off** (`execution_duration_monitoring: False` in
+  `fer_moveit_launch.py`, as in the old MTC pipeline). In MuJoCo `fer_joint7` lags its
+  reference by up to 0.28 rad and needs about 0.8 s after the trajectory ends to come to
+  rest, so moves ran 0.03–0.08 s past the 1.1 × duration + 0.5 s limit. A stuck motion is
+  still caught by the motion server's watchdog (2 × duration + 7 s). Proposed: back on with
+  `allowed_execution_duration_scaling` 1.5. Analysis tool:
+  `fer_ros2_bringup/scripts/analyze_jtc_bag.py` on a bag of
+  `/effort_trajectory_controller/controller_state`.
+- **Wrist travel to the pre-grasp:** `FindReachableGrasp` takes the first reachable
+  candidate; pre-grasp moves turned `fer_joint7` by 1.3–1.8 rad, and joint 7 sets the
+  duration of these moves. Proposed: among reachable candidates prefer the least joint-7
+  travel (a top-down grasp and the same grasp with the hand turned 180° are equivalent).
+- **MuJoCo gripper closing speed is tied to the grasp force:** `GripperActionController`
+  jumps to its target, so the finger speed is max_effort / d. Opening is limited to about
+  0.05 m/s per finger (`move_force` 1.5 N, d 30, as the real hand's 0.1 m/s width);
+  closing at the grasp force (5 N) runs at about 0.16 m/s. Separating speed from force needs
+  a finger trajectory controller.
+- **No recovery after a failed lift:** the object stays attached while it rests on the
+  table, and every later motion except a straight one fails the start-state check
+  (8.3). `Pick` has no release fallback after `Grasp` (see Known limits).
+- **A failed `Release` that did let go** is marked `LOST` by the gripper server's watch,
+  not FREE. Proposed: confirm a release against the object's width rather than the full
+  `open_width`.
+- **Tests not yet run after these changes:** `fer_moveit_config`
+  (`HeldObjectLiftsStraightOffTheSurfaceItRestsOn`, fake `/check_state_validity`) and
+  `fer_behavior_trees` (`test_trees` second place slot at x 0.47).
 
 #### 8.6 Bringup — `fer_ros2_bringup`
 
